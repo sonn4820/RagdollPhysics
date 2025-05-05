@@ -63,9 +63,6 @@ struct Octree
 
 	void UpdateTreeObjects(Octree* tree);
 	void PruneDeadBranches(Octree* tree);
-
-	bool m_debugDraw = true;
-
 private:
 
 	std::vector<CollisionRecord*> GetIntersection(std::vector<GameObject*> parentObj);

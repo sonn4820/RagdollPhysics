@@ -47,6 +47,7 @@ DoubleMat44 Ragdoll::GetRootTransform() const
 
 void Ragdoll::Update(float deltaTime)
 {
+	m_timeSinceSpawn += deltaTime;
 	m_deadTimer -= deltaTime;
 
 	if (m_deadTimer <= 0.f)
@@ -60,12 +61,6 @@ void Ragdoll::Update(float deltaTime)
 	}
 }
 
-void Ragdoll::FixedUpdate(float fixedTime)
-{
-	SolveOneIteration(fixedTime);
-}
-
-
 void Ragdoll::SolveOneIteration(float deltaTime)
 {
 	if (!m_isDead)
@@ -73,15 +68,6 @@ void Ragdoll::SolveOneIteration(float deltaTime)
 		ApplyGlobalAcceleration(m_config.gravAccel);
 		IntegratePosition_VelocityVerlet(deltaTime, m_config.airFriction);
 		IntegrateRotation_VelocityVerlet(deltaTime);
-
-		//for (auto& n : m_nodes)
-		//{
-		//	if (!n->m_isResting)
-		//	{
-		//		double energy = GetTotalEnergy(n->m_velocity, n->m_mass, m_config.gravAccel, n->m_position.z);
-		//		n->m_isResting = energy < 50.0;
-		//	}
-		//}
 	}
 
 	for (auto& n : m_nodes)
@@ -90,7 +76,7 @@ void Ragdoll::SolveOneIteration(float deltaTime)
 		n->m_torque = DoubleVec3::ZERO;
 	}
 
-	ApplyConstraints(deltaTime, m_config.iterations, DEBUG_solveConstraintWithFixedIteration);
+	ApplyConstraints(deltaTime, m_game->DEBUG_constraintNumLoop, DEBUG_solveConstraintWithFixedIteration);
 
 	PushRagdollOutOfDefaultPlane3D_Double(this);
 }
@@ -111,6 +97,22 @@ void Ragdoll::IntegratePosition_VelocityVerlet(float deltaTime, double f)
 {
 	for (auto& n : m_nodes)
 	{
+		if (m_timeSinceSpawn > m_game->DEBUG_ragdoll_canRestTimer)
+		{
+			n->m_isResting = n->m_velocity.GetLength() < m_game->DEBUG_velocityThresholdExit;
+		}
+		if (m_game->DEBUG_wakeWithEnergy)
+		{
+			if (n->m_isResting)
+			{
+				double energyA = GetTotalEnergy(n->m_velocity, n->m_mass, m_config.gravAccel, n->m_position.z);
+				if (energyA > m_game->DEBUG_energyThresholdExit)
+				{
+					n->m_isResting = false;
+				}
+			}
+		}
+
 		if (n->m_isResting && m_game->DEBUG_gameObjectCanRest)
 		{
 			n->m_velocity = DoubleVec3();
@@ -136,10 +138,11 @@ void Ragdoll::IntegrateRotation_VelocityVerlet(float deltaTime)
 			continue;
 		}
 		VelocityState current(n->m_orientation, n->m_angularVelocity);
-		VelocityState next = StepWithVelocity(deltaTime, current, n->m_torque, n->GetInverseInertiaTensor(), 0.7);
+		VelocityState next = StepWithVelocity(deltaTime, current, (n->m_lastFrameTorque + n->m_torque) * 0.5f, n->GetInverseInertiaTensor(), 0.6);
 		n->m_orientation = next.q;
 		n->m_orientation.Normalize();
 		n->m_angularVelocity = next.omega;
+		n->m_lastFrameTorque = n->m_torque;
 	}
 }
 
@@ -309,7 +312,7 @@ void Ragdoll::CheckShouldItBeDead()
 void Ragdoll::CreateSphereNode()
 {
 	DoubleVec3 position = m_transform.GetTranslation3D();
-	auto newNode = new SphereNode(m_game, "root", 0.7, nullptr, 1, m_nodeColor);
+	auto newNode = new SphereNode(m_game, this, "root", nullptr, DoubleMat44(), 0.7, 1, m_nodeColor);
 	newNode->m_ragdoll = this;
 	newNode->m_position = position;
 	m_nodes.push_back(newNode);
@@ -318,7 +321,7 @@ void Ragdoll::CreateSphereNode()
 void Ragdoll::CreateCapsuleNode()
 {
 	DoubleVec3 position = m_transform.GetTranslation3D();
-	auto newNode = new CapsuleNode(m_game, "root", 0.7, DoubleVec3(0, 0, 1), 1.5, nullptr, 1, m_nodeColor);
+	auto newNode = new CapsuleNode(m_game, this, "root", nullptr, DoubleMat44(), 0.7, DoubleVec3(0, 0, 1), 1.5, 1, m_nodeColor);
 	newNode->m_ragdoll = this;
 	newNode->m_position = position;
 	m_nodes.push_back(newNode);
@@ -333,33 +336,33 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 
 	// section 0
 	Node* pelvis = CreateRootNode("pelvis", position, 0.7, 1.0);
-	Node* lower_Torso = CreateSphereNode("lower_Torso", up * 1.5, 0.7, "pelvis", 1);
-	Node* upper_Torso = CreateSphereNode("upper_Torso", up * 1.5, 0.7, "lower_Torso", 1);
-	Node* head = CreateSphereNode("head", up * 1.5, 0.7, "upper_Torso", 0.5);
+	Node* lower_Torso = CreateSphereNode("lower_Torso", pelvis, up * 1.4, 0.7, 1);
+	Node* upper_Torso = CreateSphereNode("upper_Torso", lower_Torso, up * 1.4, 0.7, 1);
+	Node* head = CreateSphereNode("head", upper_Torso, up * 1.4, 0.7, 0.5);
 
 	// section 1
-	Node* left_shoulder = CreateSphereNode("left_shoulder", left * 1.3 + up * 0.5, 0.6, "upper_Torso", 0.5);
-	Node* left_upperArm = CreateCapsuleNode("left_upperArm", left * 1.45, 0.5, left, 0.3, "left_shoulder", 0.3);
-	Node* left_lowerArm = CreateCapsuleNode("left_lowerArm", left * 1.65, 0.5, left, 0.3, "left_upperArm", 0.3);
-	Node* left_hand = CreateSphereNode("left_hand", left * 1.3, 0.5, "left_lowerArm", 0.3);
-
+	Node* left_shoulder = CreateSphereNode("left_shoulder", upper_Torso, left * 0.9 + up * 0.3, 0.6, 0.5);
+	Node* left_upperArm = CreateCapsuleNode("left_upperArm", left_shoulder, left * 1.1, 0.5, left, 0.2, 0.3);
+	Node* left_lowerArm = CreateCapsuleNode("left_lowerArm", left_upperArm, left * 1.25, 0.5, left, 0.2, 0.3);
+	Node* left_hand = CreateSphereNode("left_hand", left_lowerArm, left * 1.1, 0.5, 0.3);
+	
 	// section 2
-	Node* right_shoulder = CreateSphereNode("right_shoulder", left * -1.3 + up * 0.5, 0.6, "upper_Torso", 0.5);
-	Node* right_upperArm = CreateCapsuleNode("right_upperArm", left * -1.45, 0.5, -left, 0.3, "right_shoulder", 0.3);
-	Node* right_lowerArm = CreateCapsuleNode("right_lowerArm", left * -1.65, 0.5, -left, 0.3, "right_upperArm", 0.3);
-	Node* right_hand = CreateSphereNode("right_hand", left * -1.3, 0.5, "right_lowerArm", 0.3);
-
+	Node* right_shoulder = CreateSphereNode("right_shoulder", upper_Torso, left * -0.9 + up * 0.3, 0.6, 0.5);
+	Node* right_upperArm = CreateCapsuleNode("right_upperArm", right_shoulder, left * -1.1, 0.5, -left, 0.2, 0.3);
+	Node* right_lowerArm = CreateCapsuleNode("right_lowerArm", right_upperArm, left * -1.25, 0.5, -left, 0.2, 0.3);
+	Node* right_hand = CreateSphereNode("right_hand", right_lowerArm, left * -1.1, 0.5, 0.3);
+	
 	// section 3
-	Node* left_upperLeg = CreateCapsuleNode("left_upperLeg", foward * 0.3 + left * 0.8 + up * -1.8, 0.6, foward * 0.2 + up * -1, 0.7, "pelvis", 0.7);
-	Node* left_lowerLeg = CreateCapsuleNode("left_lowerLeg", up * -2.7, 0.6, foward * -0.2 + up * -1, 0.7, "left_upperLeg", 0.4);
-	Node* left_foot = CreateSphereNode("left_foot", up * -2.2, 0.6, "left_lowerLeg", 0.3);
-
+	Node* left_upperLeg = CreateCapsuleNode("left_upperLeg", pelvis, foward * 0.2 + left * 0.7 + up * -1.8, 0.6, foward * 0.2 + up * -1, 0.7, 0.7);
+	Node* left_lowerLeg = CreateCapsuleNode("left_lowerLeg", left_upperLeg, up * -2.5, 0.6, foward * -0.1 + up * -1, 0.7, 0.4);
+	Node* left_foot = CreateSphereNode("left_foot", left_lowerLeg, up * -1.8, 0.6, 0.3);
+	
 	// section 4
-	Node* right_upperLeg = CreateCapsuleNode("right_upperLeg", foward * 0.3 + left * -0.8 + up * -1.8, 0.6, foward * 0.2 + up * -1, 0.7, "pelvis", 0.7);
-	Node* right_lowerLeg = CreateCapsuleNode("right_lowerLeg", up * -2.7, 0.6, foward * -0.2 + up * -1, 0.7, "right_upperLeg", 0.4);
-	Node* right_foot = CreateSphereNode("right_foot", up * -2.2, 0.6, "right_lowerLeg", 0.3);
-
-	// section 0
+	Node* right_upperLeg = CreateCapsuleNode("right_upperLeg", pelvis, foward * 0.2 + left * -0.7 + up * -1.8, 0.6, foward * 0.2 + up * -1, 0.7, 0.7);
+	Node* right_lowerLeg = CreateCapsuleNode("right_lowerLeg", right_upperLeg, up * -2.5, 0.6, foward * -0.1 + up * -1, 0.7, 0.4);
+	Node* right_foot = CreateSphereNode("right_foot", right_lowerLeg, up * -1.8, 0.6, 0.3);
+	
+	// head and body
 	DoubleVec3 s0_c0Dir = (lower_Torso->m_position - pelvis->m_position).GetNormalized();
 	DoubleVec3 s0_c0PinA = pelvis->m_position + s0_c0Dir * pelvis->GetHalfLength();
 	DoubleVec3 s0_c0PinB = lower_Torso->m_position - s0_c0Dir * lower_Torso->GetHalfLength();
@@ -367,8 +370,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s0_c0PinA,
 		s0_c0PinB,
 		(s0_c0PinA - s0_c0PinB).GetLength(),
-		DoubleVec3(-30.0, -30.0, -40.0),
-		DoubleVec3(30.0, 30.0, 40.0));
+		DoubleVec3(-15.0, -20.0, -40.0),
+		DoubleVec3(15.0, 20.0, 40.0));
 
 	DoubleVec3 s0_c1Dir = (upper_Torso->m_position - lower_Torso->m_position).GetNormalized();
 	DoubleVec3 s0_c1PinA = lower_Torso->m_position + s0_c1Dir * lower_Torso->GetHalfLength();
@@ -377,8 +380,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s0_c1PinA,
 		s0_c1PinB,
 		(s0_c1PinA - s0_c1PinB).GetLength(),
-		DoubleVec3(-45.0, -30.0, -45.0),
-		DoubleVec3(45.0, 30.0, 45.0));
+		DoubleVec3(-10.0, -5.0, -15.0),
+		DoubleVec3(10.0, 5.0, 15.0));
 
 	DoubleVec3 s0_c2Dir = (head->m_position - upper_Torso->m_position).GetNormalized();
 	DoubleVec3 s0_c2PinA = upper_Torso->m_position + s0_c2Dir * upper_Torso->GetHalfLength();
@@ -390,7 +393,7 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		DoubleVec3(-45.0, -60.0, -90.0),
 		DoubleVec3(45.0, 40.0, 90.0));
 
-	// section 1
+	// shoulders and arms
 	DoubleVec3 s1_c0Dir = (left_shoulder->m_position - upper_Torso->m_position).GetNormalized();
 	DoubleVec3 s1_c0PinA = upper_Torso->m_position + s1_c0Dir * upper_Torso->GetHalfLength();
 	DoubleVec3 s1_c0PinB = left_shoulder->m_position - s1_c0Dir * left_shoulder->GetHalfLength();
@@ -398,8 +401,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s1_c0PinA,
 		s1_c0PinB,
 		(s1_c0PinA - s1_c0PinB).GetLength(),
-		DoubleVec3(-0.0, -90.0, -40.0),
-		DoubleVec3(90.0, 90.0, 90.0));
+		DoubleVec3(-0.0, -30.0, -40.0),
+		DoubleVec3(40.0, 30.0, 90.0));
 
 	DoubleVec3 s1_c1Dir = (left_upperArm->m_position - left_shoulder->m_position).GetNormalized();
 	DoubleVec3 s1_c1PinA = left_shoulder->m_position + s1_c1Dir * left_shoulder->GetHalfLength();
@@ -408,8 +411,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s1_c1PinA,
 		s1_c1PinB,
 		(s1_c1PinA - s1_c1PinB).GetLength(),
-		DoubleVec3(-40.0, -40.0, -130.0),
-		DoubleVec3(90.0, 120.0, 130.0));
+		DoubleVec3(-90.0, -40.0, -40.0),
+		DoubleVec3(90.0, 70.0, 40.0));
 
 	DoubleVec3 s1_c2Dir = (left_lowerArm->m_position - left_upperArm->m_position).GetNormalized();
 	DoubleVec3 s1_c2PinA = left_upperArm->m_position + s1_c2Dir * left_upperArm->GetHalfLength();
@@ -418,20 +421,9 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s1_c2PinA,
 		s1_c2PinB,
 		(s1_c2PinA - s1_c2PinB).GetLength(),
-		DoubleVec3(-45.0, -40.0, -45.0),
-		DoubleVec3(90.0, 110.0, 45.0));
+		DoubleVec3(-45.0, -40.0, 0),
+		DoubleVec3(90.0, 110.0, 0));
 
-	DoubleVec3 s1_c3Dir = (left_hand->m_position - left_lowerArm->m_position).GetNormalized();
-	DoubleVec3 s1_c3PinA = left_lowerArm->m_position + s1_c3Dir * left_lowerArm->GetHalfLength();
-	DoubleVec3 s1_c3PinB = left_hand->m_position - s1_c3Dir * left_hand->GetHalfLength();
-	CreateConstraint(left_lowerArm, left_hand,
-		s1_c3PinA,
-		s1_c3PinB,
-		(s1_c3PinA - s1_c3PinB).GetLength(),
-		DoubleVec3(-10.0, -20.0, -45.0),
-		DoubleVec3(10.0, 20.0, 45.0));
-
-	// section 2
 	DoubleVec3 s2_c0Dir = (right_shoulder->m_position - upper_Torso->m_position).GetNormalized();
 	DoubleVec3 s2_c0PinA = upper_Torso->m_position + s2_c0Dir * upper_Torso->GetHalfLength();
 	DoubleVec3 s2_c0PinB = right_shoulder->m_position - s2_c0Dir * right_shoulder->GetHalfLength();
@@ -439,8 +431,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s2_c0PinA,
 		s2_c0PinB,
 		(s2_c0PinA - s2_c0PinB).GetLength(),
-		DoubleVec3(-0.0, -90.0, -40.0),
-		DoubleVec3(90.0, 90.0, 90.0));
+		DoubleVec3(-40.0, -30.0, -40.0),
+		DoubleVec3(0.0, 30.0, 90.0));
 
 	DoubleVec3 s2_c1Dir = (right_upperArm->m_position - right_shoulder->m_position).GetNormalized();
 	DoubleVec3 s2_c1PinA = right_shoulder->m_position + s2_c1Dir * right_shoulder->GetHalfLength();
@@ -449,8 +441,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s2_c1PinA,
 		s2_c1PinB,
 		(s2_c1PinA - s2_c1PinB).GetLength(),
-		DoubleVec3(-40.0, -40.0, -130.0),
-		DoubleVec3(90.0, 120.0, 130.0));
+		DoubleVec3(-90.0, -40.0, -40.0),
+		DoubleVec3(90.0, 70.0, 40.0));
 
 	DoubleVec3 s2_c2Dir = (right_lowerArm->m_position - right_upperArm->m_position).GetNormalized();
 	DoubleVec3 s2_c2PinA = right_upperArm->m_position + s2_c2Dir * right_upperArm->GetHalfLength();
@@ -459,20 +451,10 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s2_c2PinA,
 		s2_c2PinB,
 		(s2_c2PinA - s2_c2PinB).GetLength(),
-		DoubleVec3(-45.0, -40.0, -45.0),
-		DoubleVec3(90.0, 110.0, 45.0));
+		DoubleVec3(-90.0, -40.0, 0),
+		DoubleVec3(45.0, 110.0, 0));
 
-	DoubleVec3 s2_c3Dir = (right_hand->m_position - right_lowerArm->m_position).GetNormalized();
-	DoubleVec3 s2_c3PinA = right_lowerArm->m_position + s2_c3Dir * right_lowerArm->GetHalfLength();
-	DoubleVec3 s2_c3PinB = right_hand->m_position - s2_c3Dir * right_hand->GetHalfLength();
-	CreateConstraint(right_lowerArm, right_hand,
-		s2_c3PinA,
-		s2_c3PinB,
-		(s2_c3PinA - s2_c3PinB).GetLength(),
-		DoubleVec3(-10.0, -20.0, -45.0),
-		DoubleVec3(10.0, 20.0, 45.0));
-
-	// section 3
+	// leg limbs
 	DoubleVec3 s3_c0Dir = (left_upperLeg->m_position - pelvis->m_position).GetNormalized();
 	DoubleVec3 s3_c0PinA = pelvis->m_position + s3_c0Dir * pelvis->GetHalfLength();
 	DoubleVec3 s3_c0PinB = left_upperLeg->m_position - s3_c0Dir * left_upperLeg->GetHalfLength();
@@ -480,8 +462,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s3_c0PinA,
 		s3_c0PinB,
 		(s3_c0PinA - s3_c0PinB).GetLength(),
-		DoubleVec3(-15.0, -40.0, -10.0),
-		DoubleVec3(0.0, 60.0, 10.0));
+		DoubleVec3(-15.0, -15.0, -45.0),
+		DoubleVec3(35.0, 134.0, 45.0));
 
 	DoubleVec3 s3_c1Dir = (left_lowerLeg->m_position - left_upperLeg->m_position).GetNormalized();
 	DoubleVec3 s3_c1PinA = left_upperLeg->m_position + s3_c1Dir * left_upperLeg->GetHalfLength();
@@ -493,17 +475,6 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		DoubleVec3(-20.0, -140.0, -70.0),
 		DoubleVec3(20.0, 0.0, 70.0));
 
-	DoubleVec3 s3_c2Dir = (left_foot->m_position - left_lowerLeg->m_position).GetNormalized();
-	DoubleVec3 s3_c2PinA = left_lowerLeg->m_position + s3_c2Dir * left_lowerLeg->GetHalfLength();
-	DoubleVec3 s3_c2PinB = left_foot->m_position - s3_c2Dir * left_foot->GetHalfLength();
-	CreateConstraint(left_lowerLeg, left_foot,
-		s3_c2PinA,
-		s3_c2PinB,
-		(s3_c2PinA - s3_c2PinB).GetLength(),
-		DoubleVec3(-20.0, -20.0, 0.0),
-		DoubleVec3(45.0, 20.0, 0.0));
-
-	// section 4
 	DoubleVec3 s4_c0Dir = (right_upperLeg->m_position - pelvis->m_position).GetNormalized();
 	DoubleVec3 s4_c0PinA = pelvis->m_position + s4_c0Dir * pelvis->GetHalfLength();
 	DoubleVec3 s4_c0PinB = right_upperLeg->m_position - s4_c0Dir * right_upperLeg->GetHalfLength();
@@ -511,8 +482,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s4_c0PinA,
 		s4_c0PinB,
 		(s4_c0PinA - s4_c0PinB).GetLength(),
-		DoubleVec3(-15.0, -40.0, -10.0),
-		DoubleVec3(0.0, 60.0, 10.0));
+		DoubleVec3(-35.0, -15.0, -45.0),
+		DoubleVec3(15.0, 134.0, 45.0));
 
 	DoubleVec3 s4_c1Dir = (right_lowerLeg->m_position - right_upperLeg->m_position).GetNormalized();
 	DoubleVec3 s4_c1PinA = right_upperLeg->m_position + s4_c1Dir * right_upperLeg->GetHalfLength();
@@ -524,6 +495,37 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		DoubleVec3(-20.0, -140.0, -70.0),
 		DoubleVec3(20.0, 0.0, 70.0));
 
+	// feet and hand
+	DoubleVec3 s1_c3Dir = (left_hand->m_position - left_lowerArm->m_position).GetNormalized();
+	DoubleVec3 s1_c3PinA = left_lowerArm->m_position + s1_c3Dir * left_lowerArm->GetHalfLength();
+	DoubleVec3 s1_c3PinB = left_hand->m_position - s1_c3Dir * left_hand->GetHalfLength();
+	CreateConstraint(left_lowerArm, left_hand,
+		s1_c3PinA,
+		s1_c3PinB,
+		(s1_c3PinA - s1_c3PinB).GetLength(),
+		DoubleVec3(-10.0, -20.0, -45.0),
+		DoubleVec3(10.0, 20.0, 45.0));
+
+	DoubleVec3 s2_c3Dir = (right_hand->m_position - right_lowerArm->m_position).GetNormalized();
+	DoubleVec3 s2_c3PinA = right_lowerArm->m_position + s2_c3Dir * right_lowerArm->GetHalfLength();
+	DoubleVec3 s2_c3PinB = right_hand->m_position - s2_c3Dir * right_hand->GetHalfLength();
+	CreateConstraint(right_lowerArm, right_hand,
+		s2_c3PinA,
+		s2_c3PinB,
+		(s2_c3PinA - s2_c3PinB).GetLength(),
+		DoubleVec3(-10.0, -20.0, -45.0),
+		DoubleVec3(10.0, 20.0, 45.0));
+
+	DoubleVec3 s3_c2Dir = (left_foot->m_position - left_lowerLeg->m_position).GetNormalized();
+	DoubleVec3 s3_c2PinA = left_lowerLeg->m_position + s3_c2Dir * left_lowerLeg->GetHalfLength();
+	DoubleVec3 s3_c2PinB = left_foot->m_position - s3_c2Dir * left_foot->GetHalfLength();
+	CreateConstraint(left_lowerLeg, left_foot,
+		s3_c2PinA,
+		s3_c2PinB,
+		(s3_c2PinA - s3_c2PinB).GetLength(),
+		DoubleVec3(-20.0, -20.0, 0.0),
+		DoubleVec3(45.0, 20.0, 0.0));
+
 	DoubleVec3 s4_c2Dir = (right_foot->m_position - right_lowerLeg->m_position).GetNormalized();
 	DoubleVec3 s4_c2PinA = right_lowerLeg->m_position + s4_c2Dir * right_lowerLeg->GetHalfLength();
 	DoubleVec3 s4_c2PinB = right_foot->m_position - s4_c2Dir * right_foot->GetHalfLength();
@@ -531,8 +533,8 @@ void Ragdoll::CreateTPose_CapsulesAndSpheres()
 		s4_c2PinA,
 		s4_c2PinB,
 		(s4_c2PinA - s4_c2PinB).GetLength(),
-		DoubleVec3(-20.0, -20.0, 0.0),
-		DoubleVec3(45.0, 20.0, 0.0));
+		DoubleVec3(-45.0, -20.0, 0.0),
+		DoubleVec3(20.0, 20.0, 0.0));
 }
 
 void Ragdoll::CreateDebugNodes()
@@ -598,60 +600,44 @@ void Ragdoll::CreateDebugNodes()
 	//	DoubleVec3(90, 120, 30));
 }
 
-Node* Ragdoll::CreateRootNode(std::string name,
-	DoubleVec3 offsetPositionToParent,
-	double radius,
-	double mass)
+Node* Ragdoll::CreateRootNode(std::string name, DoubleVec3 offsetPositionToParent, double radius, double mass)
 {
-	auto newNode = new SphereNode(m_game, name, radius, nullptr, mass, m_nodeColor);
+	auto newNode = new SphereNode(m_game, this, name, nullptr, m_transform, radius, mass, m_nodeColor);
 	newNode->m_ragdoll = this;
 	newNode->m_position = offsetPositionToParent;
 	m_nodes.push_back(newNode);
 	return newNode;
 }
 
-Node* Ragdoll::CreateSphereNode(std::string name,
-	DoubleVec3 offsetPositionToParent,
-	double radius,
-	std::string parentName,
-	double mass)
+Node* Ragdoll::CreateSphereNode(std::string name, Node* parent, DoubleVec3 offsetPositionToParent, double radius, double mass)
 {
 	DoubleVec3 offset = offsetPositionToParent;
 
-	Node* parent = GetNode(parentName);
 	if (parent)
 	{
 		offset += parent->m_offsetToParent;
 	}
-	auto newNode = new SphereNode(m_game, name, radius, parent, mass, m_nodeColor);
-	DoubleMat44 matrix = DoubleMat44::CreateTranslation3D(m_nodes[0]->m_position);
-	newNode->m_position = matrix.TransformPosition3D(offset);
-	newNode->m_ragdoll = this;
-	newNode->m_offsetToParent = offset;
+	DoubleMat44 matrix = DoubleMat44::CreateTranslation3D(m_nodes[0]->m_position + offset);
+
+	auto newNode = new SphereNode(m_game, this, name, parent, matrix, radius, mass, m_nodeColor);
+
 	m_nodes.push_back(newNode);
 	return newNode;
 }
 
-Node* Ragdoll::CreateCapsuleNode(std::string name,
-	DoubleVec3 offsetPositionToParent,
-	double radius,
-	DoubleVec3 axis,
-	double halfLength,
-	std::string parentName,
-	double mass /*= 1.0*/)
+Node* Ragdoll::CreateCapsuleNode(std::string name, Node* parent, DoubleVec3 offsetPositionToParent, double radius, DoubleVec3 axis, double halfLength, double mass)
 {
 	DoubleVec3 offset = offsetPositionToParent;
 
-	Node* parent = GetNode(parentName);
 	if (parent)
 	{
 		offset += parent->m_offsetToParent;
 	}
-	auto newNode = new CapsuleNode(m_game, name, radius, axis.GetNormalized(), halfLength, parent, mass, m_nodeColor);
-	DoubleMat44 matrix = DoubleMat44::CreateTranslation3D(m_nodes[0]->m_position);
-	newNode->m_position = matrix.TransformPosition3D(offset);
-	newNode->m_ragdoll = this;
-	newNode->m_offsetToParent = offset;
+
+	DoubleMat44 matrix = DoubleMat44::CreateTranslation3D(m_nodes[0]->m_position + offset);
+
+	auto newNode = new CapsuleNode(m_game, this, name, parent, matrix, radius, axis.GetNormalized(), halfLength, mass, m_nodeColor);
+
 	m_nodes.push_back(newNode);
 	return newNode;
 }
@@ -668,11 +654,9 @@ Constraint* Ragdoll::CreateConstraint(Node* nA, Node* nB,
 	return newConstraint;
 }
 
-Node::Node(Game* game, std::string name, double radius, Node* parent, double mass)
-	:GameObject(game), m_name(name), m_parent(parent), m_radius(radius)
+Node::Node(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, double mass)
+	:GameObject(game, transform), m_ragdoll(ragdoll), m_name(name), m_parent(parent), m_radius(radius)
 {
-	m_orientation = DoubleQuaternion();
-
 	m_mass = mass;
 	m_invMass = 1 / mass;
 
@@ -694,14 +678,46 @@ void Node::Render() const
 	g_theRenderer->SetModelConstants(GetModelMatrix(), m_color);
 	g_theRenderer->DrawIndexedBuffer(m_vbuffer, m_ibuffer, m_indexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (m_game->DEBUG_drawDebug)
+	if (m_game->DEBUG_DebugDraw)
 	{
-		g_theRenderer->BindShader(nullptr);
 		std::vector<Vertex_PCU> debug;
-		AddVertsForLineAABB3D(debug, GetBoundingBox(), Rgba8::COLOR_CYAN);
-		g_theRenderer->SetModelConstants();
-		g_theRenderer->DrawVertexArray(debug.size(), debug.data(), true);
-		if (m_debugbuffer) g_theRenderer->DrawVertexBuffer(m_debugbuffer, m_debugvertexes.size());
+
+		if (m_game->DEBUG_DebugDrawOctree)
+		{
+			AddVertsForLineAABB3D(debug, GetBoundingBox(), Rgba8::COLOR_CYAN);
+			g_theRenderer->BindShader(nullptr);
+			g_theRenderer->SetModelConstants();
+			g_theRenderer->DrawVertexArray(debug.size(), debug.data(), true);
+		}
+
+		if (m_game->DEBUG_DebugDrawBasis)
+		{
+			g_theRenderer->SetDepthStencilMode(DepthMode::DISABLED);
+			g_theRenderer->BindShader(nullptr);
+			g_theRenderer->BindTexture(nullptr, 0);
+			g_theRenderer->BindTexture(nullptr, 1);
+			g_theRenderer->BindTexture(nullptr, 2);
+			g_theRenderer->SetModelConstants(GetModelMatrix());
+			g_theRenderer->DrawVertexBuffer(m_debugbuffer, m_debugvertexes.size());
+
+			if (m_parent)
+			{
+				AddVertsForLine3D(debug, m_position, m_parent->m_position, 0.01f, Rgba8::COLOR_DARK_X2_GRAY, 4);
+			}
+			g_theRenderer->BindShader(nullptr);
+			g_theRenderer->SetModelConstants();
+			g_theRenderer->SetRasterizerMode(RasterizerMode::WIREFRAME_CULL_NONE);
+			g_theRenderer->DrawVertexArray(debug.size(), debug.data(), true);
+		}
+
+		if (m_game->DEBUG_DebugDrawVel)
+		{
+			AddVertsForArrow3D(debug, m_position, m_position + m_velocity, 0.025f, Rgba8::COLOR_YELLOW);
+			AddVertsForArrow3D(debug, m_position, m_position + m_angularVelocity, 0.025f, Rgba8(207, 159, 255));
+			g_theRenderer->BindShader(nullptr);
+			g_theRenderer->SetModelConstants();
+			g_theRenderer->DrawVertexArray(debug.size(), debug.data(), true);
+		}
 	}
 }
 
@@ -771,10 +787,7 @@ bool Constraint::SolveDistanceAndVelocity(float timeStep, double fixRate)
 	double errorDist = m_targetDistance - posLength;
 
 	// Resting Distance
-	if (abs(errorDist) <= 0.1)
-	{
-		return false;
-	}
+
 
 	auto sign = (int)(abs(errorDist) / errorDist);
 
@@ -789,11 +802,11 @@ bool Constraint::SolveDistanceAndVelocity(float timeStep, double fixRate)
 
 	double jPos = -1.0 / (nA->m_invMass + nB->m_invMass + aDotPos + bDotPos);
 
-	DoubleVec3 posACorrection = jPos * sign * nA->m_invMass * deltaPos * timeStep * fixRate;
-	DoubleVec3 posBCorrection = jPos * sign * nB->m_invMass * deltaPos * timeStep * fixRate;
-
-	nA->m_position += posACorrection;
-	nB->m_position -= posBCorrection;
+	if (abs(errorDist) > 0.1)
+	{
+		nA->m_position += jPos * sign * nA->m_invMass * deltaPos * timeStep * fixRate;
+		nB->m_position -= jPos * sign * nB->m_invMass * deltaPos * timeStep * fixRate;
+	}
 
 	// Calculate The Fix For Rotation
 	DoubleVec3 jQuatBodyA = nA->m_orientation.GetConjugated().Rotate(jPos * deltaPos);
@@ -827,7 +840,7 @@ bool Constraint::SolveDistanceAndVelocity(float timeStep, double fixRate)
 	DoubleVec3 aVelImpulse = (deltaVel * jVel * nA->m_invMass);
 	DoubleVec3 bVelImpulse = (deltaVel * jVel * nB->m_invMass);
 
-	DoubleVec3 limit = DoubleVec3(deltaImpulseLimit, deltaImpulseLimit, deltaImpulseLimit);
+	DoubleVec3 limit = DoubleVec3(m_game->DEBUG_deltaImpulseLimit, m_game->DEBUG_deltaImpulseLimit, m_game->DEBUG_deltaImpulseLimit);
 
 	aVelImpulse = Clamp(aVelImpulse, -limit, limit);
 	bVelImpulse = Clamp(bVelImpulse, -limit, limit);
@@ -842,31 +855,12 @@ bool Constraint::SolveDistanceAndVelocity(float timeStep, double fixRate)
 	nB->m_angularVelocity -= bAngularImpulse;
 
 	// FIX ROTATION
-	nA->m_orientation = deltaQA * nA->m_orientation;
-	//nB->m_rotation = deltaQB * nB->m_rotation;
-
-	nA->m_orientation.Normalize();
-	nB->m_orientation.Normalize();
-
-	// WAKE IF IT'S RESTING
-	if (nA->m_isResting)
+	if (abs(errorDist) > 0.1)
 	{
-		double energyA = GetTotalEnergy(nA->m_velocity, nA->m_mass, m_ragdoll->m_config.gravAccel, nA->m_position.z);
-		if (energyA > ENERGY_EXIT_REST_THRESHOLD)
-		{
-			nA->m_isResting = false;
-		}
+		nA->m_orientation = deltaQA * nA->m_orientation;
+		nA->m_orientation.Normalize();
+		nB->m_orientation.Normalize();
 	}
-
-	if (nB->m_isResting)
-	{
-		double energyB = GetTotalEnergy(nB->m_velocity, nB->m_mass, m_ragdoll->m_config.gravAccel, nB->m_position.z);
-		if (energyB > ENERGY_EXIT_REST_THRESHOLD)
-		{
-			nB->m_isResting = false;
-		}
-	}
-
 	return true;
 }
 
@@ -882,9 +876,9 @@ bool Constraint::SolveAngle(float timeStep, double fixRate)
 	bool jFix = false;
 	bool kFix = false;
 
-	if (localQ_A.i < qMin.i || localQ_A.i > qMax.i) iFix = true;
-	if (localQ_A.j < qMin.j || localQ_A.j > qMax.j) jFix = true;
-	if (localQ_A.k < qMin.k || localQ_A.k > qMax.k) kFix = true;
+	if (localQ_A.i <= qMin.i || localQ_A.i >= qMax.i) iFix = true;
+	if (localQ_A.j <= qMin.j || localQ_A.j >= qMax.j) jFix = true;
+	if (localQ_A.k <= qMin.k || localQ_A.k >= qMax.k) kFix = true;
 
 	if (!iFix && !jFix && !kFix)
 	{
@@ -896,8 +890,13 @@ bool Constraint::SolveAngle(float timeStep, double fixRate)
 	localQ_A.j = DoubleMin(DoubleMax(localQ_A.j, qMin.j), qMax.j);
 	localQ_A.k = DoubleMin(DoubleMax(localQ_A.k, qMin.k), qMax.k);
 
+	if (!iFix) localQ_A.i = 0;
+	if (!jFix) localQ_A.j = 0;
+	if (!kFix) localQ_A.k = 0;
+
 	double mag = localQ_A.GetMagnitude();
 	localQ_A.w = sqrt(1.0 - mag);
+
 
 	DoubleQuaternion deltaQ = nA->m_orientation * localQ_A * nA->m_orientation.GetConjugated();
 	DoubleQuaternion qCorrection = relativeQ * deltaQ;
@@ -923,7 +922,7 @@ bool Constraint::SolveAngle(float timeStep, double fixRate)
 	DoubleVec3 worldOmegaA = nA->m_orientation.Rotate(nA->m_angularVelocity);
 	DoubleVec3 worldOmegaB = nB->m_orientation.Rotate(nB->m_angularVelocity);
 
-	DoubleVec3 correctionOmega = -(1.0f + restitution) * (worldOmegaA - worldOmegaB);
+	DoubleVec3 correctionOmega = -(1.0f + m_game->DEBUG_restitution) * (worldOmegaA - worldOmegaB);
 
 	if (!iFix) correctionOmega.x = 0;
 	if (!jFix) correctionOmega.y = 0;
@@ -992,7 +991,7 @@ void PushRagdollOutOfDefaultPlane3D_Double(Ragdoll* ragdoll)
 			{
 				n->m_position.z = n->m_radius;
 
-				NodeCollisionSolver solveVsPlane;
+				NodeCollisionSolver solveVsPlane(n->m_game);
 				solveVsPlane.ResolveCollision(col);
 
 				n->AccumulateForce(-ragdoll->m_config.gravAccel);
@@ -1024,7 +1023,7 @@ void PushRagdollOutOfDefaultPlane3D_Double(Ragdoll* ragdoll)
 				cap.m_start.z = n->m_radius;
 				n->m_position = cap.m_start + cap.GetAxisNormal() * axisHalfLength;
 
-				NodeCollisionSolver solveVsPlane;
+				NodeCollisionSolver solveVsPlane(n->m_game);
 				solveVsPlane.ResolveCollision(col);
 
 
@@ -1045,7 +1044,7 @@ void PushRagdollOutOfDefaultPlane3D_Double(Ragdoll* ragdoll)
 				cap.m_end.z = n->m_radius;
 				n->m_position = cap.m_end - cap.GetAxisNormal() * axisHalfLength;
 
-				NodeCollisionSolver solveVsPlane;
+				NodeCollisionSolver solveVsPlane(n->m_game);
 				solveVsPlane.ResolveCollision(col);
 
 				n->AccumulateForce(-ragdoll->m_config.gravAccel);
@@ -1097,19 +1096,40 @@ RaycastRagdollResult3D MouseRaycastVsRagdollNode(Camera* camera, Vec2 cursorPosi
 	for (int i = 0; i < ragdoll->GetNodeList().size(); i++)
 	{
 		Node* n = ragdoll->GetNodeList()[i];
-		DoubleVec3 center = n->m_position;
-		double radius = n->m_radius;
-		RaycastResult3D resultNode = MouseRaycastVsSphere3D(camera, cursorPosition, center, (float)radius);
+		RaycastResult3D resultNode;
+
+		if (n->IsSphere())
+		{
+			resultNode = MouseRaycastVsSphere3D(camera, cursorPosition, n->m_position, (float)n->m_radius);
+		}
+		else
+		{
+			double halfLength = n->GetHalfLength() - n->m_radius;
+			DoubleVec3 axis = n->GetAxis().GetNormalized();
+			DoubleCapsule3 capsule = DoubleCapsule3(n->m_position - axis * halfLength, n->m_position + axis * halfLength, (float)n->m_radius);
+			resultNode = MouseRaycastVsCapsule3D(camera, cursorPosition, capsule);
+		}
+
+		finalResult.m_rayStartPos = resultNode.m_rayStartPos;
+		finalResult.m_rayFwdNormal = resultNode.m_rayFwdNormal;
+		finalResult.m_rayMaxLength = resultNode.m_rayMaxLength;
+
 		if (resultNode.m_didImpact)
 		{
-			finalResult.m_rayStartPos = resultNode.m_rayStartPos;
-			finalResult.m_rayFwdNormal = resultNode.m_rayFwdNormal;
-			finalResult.m_rayMaxLength = resultNode.m_rayMaxLength;
 			finalResult.m_didImpact = resultNode.m_didImpact;
 			finalResult.m_impactPos = resultNode.m_impactPos;
 			finalResult.m_impactNormal = resultNode.m_impactNormal;
 			finalResult.m_impactDist = resultNode.m_impactDist;
+
 			finalResult.m_hitNode = n;
+			for (size_t j = 0; j < ragdoll->GetConstraints().size(); j++)
+			{
+				Constraint* c = ragdoll->GetConstraints()[j];
+				if (c->nA == n || c->nB == n)
+				{
+					finalResult.m_hitConstraints.push_back(c);
+				}
+			}
 			break;
 		}
 	}
@@ -1150,7 +1170,11 @@ void NodeCollisionSolver::ResolveCollision(NodeCollisionPoint& col)
 
 	double sRelativeA = relativeVelA.Dot(col.normalA);
 
-	if (std::abs(sRelativeA) < m_restingSpeed)
+	if (sRelativeA > m_game->DEBUG_contactCollisionThreshold)
+	{
+		return;
+	}
+	if (sRelativeA > -m_game->DEBUG_contactCollisionThreshold)
 	{
 		ResolveRestingContact(col, rA, rB);
 		return;
@@ -1177,7 +1201,7 @@ void NodeCollisionSolver::ResolveCollision(NodeCollisionPoint& col)
 		invMassB = bodyB->m_invMass;
 	}
 
-	double j = -(1.0f + m_restitution) * sRelativeA / (bodyA->m_invMass + invMassB + termA + termB);
+	double j = -(1.0f + m_game->DEBUG_restitution) * sRelativeA / (bodyA->m_invMass + invMassB + termA + termB);
 
 	DoubleVec3 resolved_velA = bodyA->m_velocity + j * bodyA->m_invMass * col.normalA;
 	DoubleVec3 angularImpulseA = bodyA->GetInverseInertiaTensor() * rBodyA.Cross(j * nBodyA);
@@ -1201,16 +1225,15 @@ void NodeCollisionSolver::ResolveCollision(NodeCollisionPoint& col)
 		bodyA->m_angularVelocity = resolved_avelA;
 	}
 
-	ResolveFriction(col, rBodyA, rBodyB, j);
+	ResolveFriction(col, relativeVelA, rBodyA, rBodyB, j);
 
 	// REST IF LOW VELOCITY
-
-	bodyA->m_isResting = bodyA->m_velocity.GetLength() < VELOCITY_EXIT_REST_THRESHOLD;
-
-	if (bodyB)
-	{
-		bodyB->m_isResting = bodyB->m_velocity.GetLength() < VELOCITY_EXIT_REST_THRESHOLD;
-	}
+	//bodyA->m_isResting = bodyA->m_velocity.GetLength() < m_game->DEBUG_velocityThresholdExit;
+	//
+	//if (bodyB)
+	//{
+	//	bodyB->m_isResting = bodyB->m_velocity.GetLength() < m_game->DEBUG_velocityThresholdExit;
+	//}
 }
 
 void NodeCollisionSolver::ResolveRestingContact(const NodeCollisionPoint& col, const DoubleVec3& rA, const DoubleVec3& rB)
@@ -1229,14 +1252,14 @@ void NodeCollisionSolver::ResolveRestingContact(const NodeCollisionPoint& col, c
 	double d1pen_A = (col.position - bodyA->GetFurthestPointPenetrated(col.position)).Dot(col.normalA);
 	double d2pen_A = relativeVel.Dot(col.normalA);
 
-	DoubleVec3 forceA = (m_springStiffness * d1pen_A - m_damping * d2pen_A) * col.normalA;
+	DoubleVec3 forceA = (m_game->DEBUG_springStiffness * d1pen_A - m_game->DEBUG_damping * d2pen_A) * col.normalA;
 
 	if (bodyB)
 	{
 		double d1pen_B = (col.position - bodyB->GetFurthestPointPenetrated(col.position)).Dot(col.normalB);
 		double d2pen_B = (-relativeVel).Dot(col.normalB);
 
-		DoubleVec3 forceB = (m_springStiffness * d1pen_B - m_damping * d2pen_B) * col.normalB;
+		DoubleVec3 forceB = (m_game->DEBUG_springStiffness * d1pen_B - m_game->DEBUG_damping * d2pen_B) * col.normalB;
 
 		double totalMass = bodyA->m_mass + bodyB->m_mass;
 		double ratioA = bodyA->m_mass / totalMass;
@@ -1254,18 +1277,10 @@ void NodeCollisionSolver::ResolveRestingContact(const NodeCollisionPoint& col, c
 	}
 }
 
-void NodeCollisionSolver::ResolveFriction(const NodeCollisionPoint& col, const DoubleVec3& rA, const DoubleVec3& rB, double normalImpulse)
+void NodeCollisionSolver::ResolveFriction(const NodeCollisionPoint& col, DoubleVec3 relativeVel, const DoubleVec3& rA, const DoubleVec3& rB, double normalImpulse)
 {
 	Node* bodyA = col.nodeA;
 	Node* bodyB = col.nodeB;
-
-	DoubleVec3 velA = bodyA->m_velocity + bodyA->m_angularVelocity.Cross(rA);
-	DoubleVec3 velB;
-	if (bodyB)
-	{
-		velB = bodyB->m_velocity + bodyB->m_angularVelocity.Cross(rB);
-	}
-	DoubleVec3 relativeVel = velA - velB;
 
 	DoubleVec3 normalVel = col.normalA * relativeVel.Dot(col.normalA);
 	DoubleVec3 tangentVel = relativeVel - normalVel;
@@ -1274,11 +1289,9 @@ void NodeCollisionSolver::ResolveFriction(const NodeCollisionPoint& col, const D
 	// Skip if no tangential velocity
 	if (tangentSpeed < 0.0001f) return;
 
-	DoubleVec3 tangent = tangentVel / tangentSpeed;
 	double frictionImpulseMagnitude = tangentSpeed;
-	double maxFriction = normalImpulse * m_friction;
-	frictionImpulseMagnitude = DoubleMin(frictionImpulseMagnitude, maxFriction);
-	DoubleVec3 frictionImpulse = tangent * -frictionImpulseMagnitude;
+	frictionImpulseMagnitude = DoubleMin(tangentSpeed, normalImpulse * m_game->DEBUG_maxFriction);
+	DoubleVec3 frictionImpulse = tangentVel.GetNormalized() * -frictionImpulseMagnitude;
 
 	ApplyImpulseCollision(bodyA, bodyB, frictionImpulse, rA, rB);
 }
@@ -1358,39 +1371,44 @@ double GetTotalEnergy(DoubleVec3 velocity, double mass, DoubleVec3 gravity, doub
 	return KE + PE;
 }
 
-SphereNode::SphereNode(Game* game, std::string name /*= ""*/, double radius /*= 0.5*/, Node* parent /*= nullptr*/, double mass /*= 1*/, Rgba8 debugColor /*= Rgba8::COLOR_WHITE*/)
-	:Node(game, name, radius, parent, mass)
+SphereNode::SphereNode(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, double mass, Rgba8 debugColor)
+	:Node(game, ragdoll, name, parent, transform, radius, mass)
 {
 	m_isSphere = true;
 	m_color = debugColor;
+
+	if (parent)
+	{
+		m_offsetToParent = m_position - ragdoll->GetRootTransform().GetTranslation3D();
+	}
+
 	AddVertsForSphere(m_vertexes, m_indexes, Vec3::ZERO, (float)m_radius, Rgba8::COLOR_WHITE, AABB2::ZERO_TO_ONE, 16, 32);
 	CreateBuffer(g_theRenderer);
 
+	Vec3 p = Vec3::ZERO;
+	Vec3 i = p + GetModelMatrix().GetIBasis3D().GetNormalized() * 0.5f;
+	Vec3 j = p + GetModelMatrix().GetJBasis3D().GetNormalized() * 0.5f;
+	Vec3 k = p + GetModelMatrix().GetKBasis3D().GetNormalized() * 0.5f;
 
-	//Vec3 p = Vec3::ZERO;
-	//Vec3 i = p + GetModelMatrix().GetIBasis3D().GetNormalized() * 0.5f;
-	//Vec3 j = p + GetModelMatrix().GetJBasis3D().GetNormalized() * 0.5f;
-	//Vec3 k = p + GetModelMatrix().GetKBasis3D().GetNormalized() * 0.5f;
+	Vertex_PCU k1(p, Rgba8::COLOR_BLUE);
+	Vertex_PCU k2(k, Rgba8::COLOR_BLUE);
 
-	//Vertex_PCU k1(p, Rgba8::COLOR_BLUE);
-	//Vertex_PCU k2(k, Rgba8::COLOR_BLUE);
+	Vertex_PCU i1(p, Rgba8::COLOR_RED);
+	Vertex_PCU i2(i, Rgba8::COLOR_RED);
 
-	//Vertex_PCU i1(p, Rgba8::COLOR_RED);
-	//Vertex_PCU i2(i, Rgba8::COLOR_RED);
+	Vertex_PCU j1(p, Rgba8::COLOR_GREEN);
+	Vertex_PCU j2(j, Rgba8::COLOR_GREEN);
 
-	//Vertex_PCU j1(p, Rgba8::COLOR_GREEN);
-	//Vertex_PCU j2(j, Rgba8::COLOR_GREEN);
+	m_debugvertexes.push_back(k1);
+	m_debugvertexes.push_back(k2);
+	m_debugvertexes.push_back(i1);
+	m_debugvertexes.push_back(i2);
+	m_debugvertexes.push_back(j1);
+	m_debugvertexes.push_back(j2);
 
-	//m_debugvertexes.push_back(k1);
-	//m_debugvertexes.push_back(k2);
-	//m_debugvertexes.push_back(i1);
-	//m_debugvertexes.push_back(i2);
-	//m_debugvertexes.push_back(j1);
-	//m_debugvertexes.push_back(j2);
-
-	//m_debugbuffer = g_theRenderer->CreateVertexBuffer(sizeof(Vertex_PCU) * (unsigned int)m_debugvertexes.size());
-	//g_theRenderer->CopyCPUToGPU(m_debugvertexes.data(), (int)(m_debugvertexes.size() * sizeof(Vertex_PCU)), m_debugbuffer);
-	//m_debugbuffer->SetIsLinePrimitive(true);
+	m_debugbuffer = g_theRenderer->CreateVertexBuffer(sizeof(Vertex_PCU) * (unsigned int)m_debugvertexes.size());
+	g_theRenderer->CopyCPUToGPU(m_debugvertexes.data(), (int)(m_debugvertexes.size() * sizeof(Vertex_PCU)), m_debugbuffer);
+	m_debugbuffer->SetIsLinePrimitive(true);
 }
 
 double SphereNode::GetHalfLength() const
@@ -1421,7 +1439,7 @@ bool SphereNode::NodeOverlapFixedAABB_Double(DoubleAABB3 const& aabb)
 
 	if (PushSphereOutOfAABB3_Double(m_position, m_radius, aabb))
 	{
-		NodeCollisionSolver solver;
+		NodeCollisionSolver solver(m_game);
 		solver.ResolveCollision(col);
 		return true;
 	}
@@ -1442,7 +1460,7 @@ bool SphereNode::NodeOverlapFixedOBB_Double(DoubleOBB3 const& obb)
 
 	if (PushSphereOutOfOBB3_Double(m_position, m_radius, obb))
 	{
-		NodeCollisionSolver solver;
+		NodeCollisionSolver solver(m_game);
 		solver.ResolveCollision(col);
 		return true;
 	}
@@ -1458,13 +1476,13 @@ bool SphereNode::NodeOverlapFixedSphere_Double(DoubleVec3 const& center, double 
 
 	NodeCollisionPoint col;
 	col.position = nearestPoint;
-	col.normalA = (nearestPoint - center).GetNormalized();
-	col.penetration = (m_radius + radius) - (m_position - center).GetLength();
+	col.normalA = (m_position - nearestPoint).GetNormalized();
+	col.penetration = ((m_radius + radius) - (m_position - center).GetLength());
 	col.nodeA = this;
 
 	if (PushSphereOutOfSphere3D_Double(m_position, m_radius, staticSpherePos, radius, true))
 	{
-		NodeCollisionSolver solver;
+		NodeCollisionSolver solver(m_game);
 		solver.ResolveCollision(col);
 		return true;
 	}
@@ -1481,13 +1499,13 @@ bool SphereNode::NodeOverlapFixedCapsule_Double(DoubleCapsule3 const& capsule)
 
 	NodeCollisionPoint col;
 	col.position = nearestPoint;
-	col.normalA = (nearestPoint - sphereCenterCap).GetNormalized();
-	col.penetration = ((m_position - col.normalA * m_radius) - col.position).GetLength();
+	col.normalA = (m_position - nearestPoint).GetNormalized();
+	col.penetration = ((m_radius + capsule.m_radius) - (m_position - sphereCenterCap).GetLength());
 	col.nodeA = this;
 
 	if (PushSphereOutOfCapsule3_Double(m_position, m_radius, staticCapsule, true))
 	{
-		NodeCollisionSolver solver;
+		NodeCollisionSolver solver(m_game);
 		solver.ResolveCollision(col);
 		return true;
 	}
@@ -1519,16 +1537,14 @@ bool SphereNode::CollisionResolveVsRagdollNode(Node* node)
 		if (info.isColliding)
 		{
 			col.position = info.contactPoint;
-			col.normalA = (m_position - col.position).GetNormalized();
-			col.normalB = (node->m_position - col.position).GetNormalized();
-			col.penetration = (m_radius - (m_radius + node->m_radius - toN1.GetLength()) * 0.5);
+			col.normalA = info.normal;
+			col.normalB = -info.normal;
+			col.penetration = info.penDepth;
 			col.nodeA = this;
 			col.nodeB = node;
 		}
 
-		bool treatAsStatic = m_velocity.GetLength() <= restingSpeed && node->m_isResting;
-
-		PushSphereOutOfSphere3D_Double(m_position, m_radius, node->m_position, node->m_radius, treatAsStatic);
+		PushSphereOutOfSphere3D_Double(m_position, m_radius, node->m_position, node->m_radius, node->m_isResting);
 	}
 	else
 	{
@@ -1543,23 +1559,20 @@ bool SphereNode::CollisionResolveVsRagdollNode(Node* node)
 			col.position = info.contactPoint;
 			col.normalB = info.normal;
 			col.normalA = -info.normal;
-			DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(n2Cap.m_start, n2Cap.m_end, col.position);
-			col.penetration = (nearestPointToBone - col.normalA * n2Cap.m_radius - col.position).GetLength();
+			col.penetration = info.penDepth;
 			col.nodeB = this;
 			col.nodeA = node;
 		}
 
-		bool treatAsStatic = m_velocity.GetLength() <= restingSpeed && node->m_isResting;
-
-		if (PushCapsuleOutOfSphere3D_Double(n2Cap, m_position, m_radius, treatAsStatic))
+		if(PushCapsuleOutOfSphere3D_Double(n2Cap, m_position, m_radius, node->m_isResting))
 		{
-			node->m_position = n2Cap.m_start + node->GetAxis() * n2AxisHalfLength;
+			node->m_position = n2Cap.m_start + n2AxisNormalized * n2AxisHalfLength;
 		}
 	}
 
 	if (info.isColliding)
 	{
-		NodeCollisionSolver solver;
+		NodeCollisionSolver solver(m_game);
 		solver.ResolveCollision(col);
 	}
 
@@ -1573,44 +1586,49 @@ DoubleAABB3 SphereNode::GetBoundingBox() const
 	return DoubleAABB3(Min, Max);
 }
 
-CapsuleNode::CapsuleNode(Game* game, std::string name /*= ""*/, double radius /*= 0.5*/, DoubleVec3 axis /*= DoubleVec3()*/, double halfLength /*= 0*/, Node* parent /*= nullptr*/, double mass /*= 1*/, Rgba8 debugColor /*= Rgba8::COLOR_WHITE*/)
-	:Node(game, name, radius, parent, mass)
+CapsuleNode::CapsuleNode(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, DoubleVec3 axis, double halfLength, double mass, Rgba8 debugColor)
+	:Node(game, ragdoll, name, parent, transform, radius, mass)
 {
 	m_isSphere = false;
 
 	m_capsuleHalfAxisLength = halfLength;
-	m_capsuleAxis = m_orientation.Rotate(axis).GetNormalized();
+	m_capsuleAxis = axis.GetNormalized();
 	m_color = debugColor;
+
+	if (parent)
+	{
+		m_offsetToParent = m_position - ragdoll->GetRootTransform().GetTranslation3D();
+	}
 
 	DoubleCapsule3 capsule = DoubleCapsule3(DoubleVec3::ZERO - m_capsuleAxis * m_capsuleHalfAxisLength, DoubleVec3::ZERO + m_capsuleAxis * m_capsuleHalfAxisLength, m_radius);
 	AddVertsForCapsule3D(m_vertexes, m_indexes, capsule, Rgba8::COLOR_WHITE, AABB2::ZERO_TO_ONE, 32);
 	CreateBuffer(g_theRenderer);
 
 
-	//Vec3 p = Vec3::ZERO;
-	//Vec3 i = p + GetModelMatrix().GetIBasis3D().GetNormalized() * 0.5f;
-	//Vec3 j = p + GetModelMatrix().GetJBasis3D().GetNormalized() * 0.5f;
-	//Vec3 k = p + GetModelMatrix().GetKBasis3D().GetNormalized() * 0.5f;
+	Vec3 p = Vec3::ZERO;
+	Vec3 i = p + GetModelMatrix().GetIBasis3D().GetNormalized() * 0.5f;
+	Vec3 j = p + GetModelMatrix().GetJBasis3D().GetNormalized() * 0.5f;
+	Vec3 k = p + GetModelMatrix().GetKBasis3D().GetNormalized() * 0.5f;
 
-	//Vertex_PCU k1(p, Rgba8::COLOR_BLUE);
-	//Vertex_PCU k2(k, Rgba8::COLOR_BLUE);
+	Vertex_PCU k1(p, Rgba8::COLOR_BLUE);
+	Vertex_PCU k2(k, Rgba8::COLOR_BLUE);
 
-	//Vertex_PCU i1(p, Rgba8::COLOR_RED);
-	//Vertex_PCU i2(i, Rgba8::COLOR_RED);
+	Vertex_PCU i1(p, Rgba8::COLOR_RED);
+	Vertex_PCU i2(i, Rgba8::COLOR_RED);
 
-	//Vertex_PCU j1(p, Rgba8::COLOR_GREEN);
-	//Vertex_PCU j2(j, Rgba8::COLOR_GREEN);
+	Vertex_PCU j1(p, Rgba8::COLOR_GREEN);
+	Vertex_PCU j2(j, Rgba8::COLOR_GREEN);
 
-	//m_debugvertexes.push_back(k1);
-	//m_debugvertexes.push_back(k2);
-	//m_debugvertexes.push_back(i1);
-	//m_debugvertexes.push_back(i2);
-	//m_debugvertexes.push_back(j1);
-	//m_debugvertexes.push_back(j2);
+	m_debugvertexes.push_back(k1);
+	m_debugvertexes.push_back(k2);
+	m_debugvertexes.push_back(i1);
+	m_debugvertexes.push_back(i2);
+	m_debugvertexes.push_back(j1);
+	m_debugvertexes.push_back(j2);
 
-	//m_debugbuffer = g_theRenderer->CreateVertexBuffer(sizeof(Vertex_PCU) * (unsigned int)m_debugvertexes.size());
-	//g_theRenderer->CopyCPUToGPU(m_debugvertexes.data(), (int)(m_debugvertexes.size() * sizeof(Vertex_PCU)), m_debugbuffer);
-	//m_debugbuffer->SetIsLinePrimitive(true);
+	m_debugbuffer = g_theRenderer->CreateVertexBuffer(sizeof(Vertex_PCU) * (unsigned int)m_debugvertexes.size());
+	g_theRenderer->CopyCPUToGPU(m_debugvertexes.data(), (int)(m_debugvertexes.size() * sizeof(Vertex_PCU)), m_debugbuffer);
+	m_debugbuffer->SetIsLinePrimitive(true);
 }
 
 double CapsuleNode::GetHalfLength() const
@@ -1649,17 +1667,15 @@ bool CapsuleNode::NodeOverlapFixedAABB_Double(DoubleAABB3 const& aabb)
 		NodeCollisionPoint col;
 		col.position = info.contactPoint;
 		col.normalA = info.normal;
-		DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(capsule.m_start, capsule.m_end, col.position);
-		col.penetration = (nearestPointToBone - col.normalA * m_radius - col.position).GetLength();
+		col.penetration = info.penDepth;
 		col.nodeA = this;
 
 		if (PushCapsuleOutOfAABB3D_Double(capsule, aabb))
 		{
-			m_position = capsule.m_start + axisNormalize * m_capsuleHalfAxisLength;
+			m_position = capsule.m_start + capsule.GetAxis() * 0.5;
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
-
-		NodeCollisionSolver solver;
-		solver.ResolveCollision(col);
 
 		return true;
 	}
@@ -1686,17 +1702,15 @@ bool CapsuleNode::NodeOverlapFixedOBB_Double(DoubleOBB3 const& obb)
 		NodeCollisionPoint col;
 		col.position = info.contactPoint;
 		col.normalA = info.normal;
-		DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(capsule.m_start, capsule.m_end, col.position);
-		col.penetration = (nearestPointToBone - col.normalA * m_radius - col.position).GetLength();
+		col.penetration = info.penDepth;
 		col.nodeA = this;
 
 		if (PushCapsuleOutOfOBB3D_Double(capsule, obb))
 		{
-			m_position = capsule.m_start + axisNormalize * m_capsuleHalfAxisLength;
+			m_position = capsule.m_start + capsule.GetAxis() * 0.5; 
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
-
-		NodeCollisionSolver solver;
-		solver.ResolveCollision(col);
 
 		return true;
 	}
@@ -1723,17 +1737,15 @@ bool CapsuleNode::NodeOverlapFixedSphere_Double(DoubleVec3 const& center, double
 		NodeCollisionPoint col;
 		col.position = info.contactPoint;
 		col.normalA = info.normal;
-		DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(capsule.m_start, capsule.m_end, col.position);
-		col.penetration = (nearestPointToBone - col.normalA * m_radius - col.position).GetLength();
+		col.penetration = info.penDepth;
 		col.nodeA = this;
 
 		if (PushCapsuleOutOfSphere3D_Double(capsule, staticSpherePos, radius, true))
 		{
 			m_position = capsule.m_start + axisNormalize * m_capsuleHalfAxisLength;
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
-
-		NodeCollisionSolver solver;
-		solver.ResolveCollision(col);
 
 		return true;
 	}
@@ -1757,23 +1769,18 @@ bool CapsuleNode::NodeOverlapFixedCapsule_Double(DoubleCapsule3 const& capsule)
 
 	if (info.isColliding)
 	{
-		DoubleVec3 capPoints[2];
-		Optimized_GetNearestPointsBetweenLines3D_Double(capPoints, thisCapsule.GetBone(), capsule.GetBone());
-
 		NodeCollisionPoint col;
 		col.position = info.contactPoint;
 		col.normalA = info.normal;
-		DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(capsule.m_start, capsule.m_end, col.position);
-		col.penetration = (nearestPointToBone - col.normalA * m_radius - col.position).GetLength();
+		col.penetration = info.penDepth;
 		col.nodeA = this;
 
 		if (PushCapsuleOutOfCapsule3D_Double(thisCapsule, staticCapsule))
 		{
 			m_position = thisCapsule.m_start + axisNormalize * m_capsuleHalfAxisLength;
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
-
-		NodeCollisionSolver solver;
-		solver.ResolveCollision(col);
 
 		return true;
 	}
@@ -1809,17 +1816,16 @@ bool CapsuleNode::CollisionResolveVsRagdollNode(Node* node)
 			col.position = info.contactPoint;
 			col.normalA = info.normal;
 			col.normalB = -info.normal;
-			DoubleVec3 nearestPointToBone = GetNearestPointOnLineSegment3D_Double(n1Cap.m_start, n1Cap.m_end, col.position);
-			col.penetration = (m_radius + node->m_radius - (nearestPointToBone - node->m_position).GetLength()) * 0.5;
+			col.penetration = info.penDepth;
 			col.nodeA = this;
 			col.nodeB = node;
 		}
 
-		bool treatAsStatic = m_velocity.GetLength() <= restingSpeed && node->m_isResting;
-
-		if (PushCapsuleOutOfSphere3D_Double(n1Cap, node->m_position, node->m_radius, treatAsStatic))
+		if (PushCapsuleOutOfSphere3D_Double(n1Cap, node->m_position, node->m_radius, node->m_isResting))
 		{
 			m_position = n1Cap.m_start + n1AxisNormalized * n1AxisHalfLength;
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
 	}
 	else
@@ -1837,30 +1843,21 @@ bool CapsuleNode::CollisionResolveVsRagdollNode(Node* node)
 
 		if (info.isColliding)
 		{
-			DoubleVec3 capPoints[2];
-			Optimized_GetNearestPointsBetweenLines3D_Double(capPoints, n1Cap.GetBone(), n2Cap.GetBone());
-
 			col.position = info.contactPoint;
 			col.normalA = info.normal;
 			col.normalB = -info.normal;
-			col.penetration = (m_radius + node->m_radius - (capPoints[0] - capPoints[1]).GetLength()) * 0.5;
+			col.penetration = info.penDepth;
 			col.nodeA = this;
 			col.nodeB = node;
 		}
 
-		bool treatAsStatic = m_velocity.GetLength() <= restingSpeed && node->m_isResting;
-
-		if (PushCapsuleOutOfCapsule3D_Double(n1Cap, n2Cap, treatAsStatic))
+		if (PushCapsuleOutOfCapsule3D_Double(n1Cap, n2Cap, node->m_isResting))
 		{
 			m_position = n1Cap.m_start + n1AxisNormalized * n1AxisHalfLength;
 			node->m_position = n2Cap.m_start + n2AxisNormalized * n2AxisHalfLength;
+			NodeCollisionSolver solver(m_game);
+			solver.ResolveCollision(col);
 		}
-	}
-
-	if (info.isColliding)
-	{
-		NodeCollisionSolver solver;
-		solver.ResolveCollision(col);
 	}
 
 	return info.isColliding;
@@ -1877,8 +1874,5 @@ void RagdollPhysicsJob::Execute()
 {
 	if (m_ragdoll->m_isDead) return;
 
-	for (size_t i = 0; i < m_iterations; i++)
-	{
-		m_ragdoll->SolveOneIteration(m_timeStep);
-	}
+	m_ragdoll->SolveOneIteration(m_timeStep);
 }

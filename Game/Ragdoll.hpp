@@ -15,15 +15,6 @@
 /// 
 /// </summary>
 
-constexpr double restitution = 0.5;
-constexpr double friction = 0.5;
-constexpr double restingSpeed = 1.5;
-constexpr double springStiffness = 50.0;
-constexpr double damping = 5.0;
-constexpr double deltaImpulseLimit = 15;
-
-
-
 struct Object;
 struct Node;
 struct Constraint;
@@ -39,7 +30,7 @@ struct VerletConfig
 struct RaycastRagdollResult3D : public RaycastResult3D
 {
 	Node* m_hitNode = nullptr;
-	Constraint* m_hitConstraint = nullptr;
+	std::vector<Constraint*> m_hitConstraints;
 };
 
 struct NodeCollisionPoint
@@ -55,16 +46,11 @@ struct NodeCollisionPoint
 struct NodeCollisionSolver
 {
 public:
-	// Configuration parameters
-	double m_restitution = restitution;			// Coefficient of restitution
-	double m_friction = friction;				// Coefficient of friction
-	double m_restingSpeed = restingSpeed;		// Speed threshold for resting contact
-	double m_springStiffness = springStiffness;	// For resting contact resolution
-	double m_damping = damping;					// Damping coefficient for resting contacts
-
+	NodeCollisionSolver(Game* game) : m_game(game) {}
+	Game* m_game;
 	void ResolveCollision(NodeCollisionPoint& col);
 	void ResolveRestingContact(const NodeCollisionPoint& col, const DoubleVec3& rA, const DoubleVec3& rB);
-	void ResolveFriction(const NodeCollisionPoint& col, const DoubleVec3& rA, const DoubleVec3& rB, double normalImpulse);
+	void ResolveFriction(const NodeCollisionPoint& col, DoubleVec3 relativeVel, const DoubleVec3& rA, const DoubleVec3& rB, double normalImpulse);
 	void ApplyImpulseCollision(Node* bodyA, Node* bodyB, const DoubleVec3& impulse, const DoubleVec3& rA, const DoubleVec3& rB);
 };
 
@@ -86,7 +72,7 @@ struct VelocityState
 
 struct Node : public GameObject
 {
-	Node(Game* game, std::string name = "", double radius = 0.5, Node* parent = nullptr, double mass = 1);
+	Node(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, double mass);
 	~Node() = default;
 
 	std::string m_name;
@@ -94,6 +80,7 @@ struct Node : public GameObject
 	Ragdoll* m_ragdoll = nullptr;
 
 	double m_radius = 0.25;
+	bool m_previousResting = false;
 	bool m_isSphere = true;
 	DoubleVec3 m_offsetToParent = DoubleVec3::ZERO;
 
@@ -116,7 +103,7 @@ public:
 
 struct SphereNode : public Node
 {
-	SphereNode(Game* game, std::string name = "", double radius = 0.5, Node* parent = nullptr, double mass = 1, Rgba8 debugColor = Rgba8::COLOR_WHITE);
+	SphereNode(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, double mass, Rgba8 debugColor);
 	~SphereNode() = default;
 	double GetHalfLength() const override;
 	DoubleVec3 GetAxis() const override;
@@ -136,7 +123,7 @@ struct CapsuleNode : public Node
 	DoubleVec3 m_capsuleAxis;
 	double m_capsuleHalfAxisLength;
 
-	CapsuleNode(Game* game, std::string name = "", double radius = 0.5, DoubleVec3 axis = DoubleVec3(), double halfLength = 0, Node* parent = nullptr, double mass = 1, Rgba8 debugColor = Rgba8::COLOR_WHITE);
+	CapsuleNode(Game* game, Ragdoll* ragdoll, std::string name, Node* parent, DoubleMat44 transform, double radius, DoubleVec3 axis, double halfLength, double mass, Rgba8 debugColor);
 	~CapsuleNode() = default;
 	double GetHalfLength() const override;
 	DoubleVec3 GetAxis() const override;
@@ -197,7 +184,6 @@ public:
 
 	void Render() const;
 	void Update(float deltaTime);
-	void FixedUpdate(float fixedTime);
 
 	void SolveOneIteration(float deltaTime);
 
@@ -238,6 +224,7 @@ public:
 	int m_brokenLimit = 0;
 	int m_brokenCount = 0;
 
+	float m_timeSinceSpawn = 0.f;
 	bool m_isDead = false;
 	double m_totalEnergy = 0.f;
 	float m_deadTimer = 5.f;
@@ -254,9 +241,9 @@ private:
 	void CreateTPose_CapsulesAndSpheres();
 	void CreateDebugNodes();
 
-	Node* CreateRootNode(std::string name, DoubleVec3 offsetPositionToParent, double radius, double mass = 1.0);
-	Node* CreateSphereNode(std::string name, DoubleVec3 offsetPositionToParent, double radius, std::string parentName, double mass = 1.0);
-	Node* CreateCapsuleNode(std::string name, DoubleVec3 offsetPositionToParent, double radius, DoubleVec3 axis, double halfLength, std::string parentName, double mass = 1.0);
+	Node* CreateRootNode(std::string name, DoubleVec3 offsetPositionToParent, double radius, double mass);
+	Node* CreateSphereNode(std::string name, Node* parent, DoubleVec3 offsetPositionToParent, double radius, double mass);
+	Node* CreateCapsuleNode(std::string name, Node* parent, DoubleVec3 offsetPositionToParent, double radius, DoubleVec3 axis, double halfLength, double mass);
 
 	Constraint* CreateConstraint(Node* n1 /* parent */, Node* n2 /* child */, const DoubleVec3& pinA, const DoubleVec3& pinB, const double targetDistance, const DoubleVec3& minAngle, const DoubleVec3& maxAngle);
 
@@ -269,14 +256,13 @@ private:
 class RagdollPhysicsJob : public Job
 {
 public:
-	RagdollPhysicsJob(Ragdoll* ragdoll, int iterations, float timeStep)
-		: m_ragdoll(ragdoll), m_iterations(iterations), m_timeStep(timeStep) {}
+	RagdollPhysicsJob(Ragdoll* ragdoll, float timeStep)
+		: m_ragdoll(ragdoll), m_timeStep(timeStep) {}
 
 	void Execute() override;
 
 	// Make these fields accessible for pooling
 	Ragdoll* m_ragdoll = nullptr;
-	int m_iterations = 1;
 	float m_timeStep = (float)TIME_STEP;
 };
 

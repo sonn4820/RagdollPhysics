@@ -5,10 +5,6 @@
 #include "Engine/Math/AABB3.hpp"
 #include "Engine/Renderer/Renderer.hpp"
 
-constexpr float FORCE_EXIT_REST_THRESHOLD = 500.f;
-constexpr double VELOCITY_EXIT_REST_THRESHOLD = 5;
-constexpr double ENERGY_EXIT_REST_THRESHOLD = 100;
-
 class Game;
 struct Node;
 struct CollisionRecord;
@@ -18,6 +14,7 @@ class GameObject
 {
 public:
 	GameObject(Game* game);
+	GameObject(Game* game, DoubleMat44 transform);
 	virtual ~GameObject();
 
 	virtual void Render() const = 0;
@@ -47,6 +44,7 @@ public:
 	DoubleVec3 m_acceleration = DoubleVec3::ZERO;
 	DoubleQuaternion m_orientation = DoubleQuaternion(0, 0, 1, 0);
 	DoubleVec3 m_angularVelocity = DoubleVec3::ZERO;
+	DoubleVec3 m_lastFrameTorque = DoubleVec3::ZERO;
 	DoubleVec3 m_torque = DoubleVec3::ZERO;
 	DoubleVec3 m_netForce = DoubleVec3::ZERO;
 

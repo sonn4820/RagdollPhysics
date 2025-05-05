@@ -16,6 +16,13 @@
 #include "ThirdParty/imgui/imgui.h"
 #include "ThirdParty/imgui/backends/imgui_impl_win32.h"
 #include "ThirdParty/imgui/backends/imgui_impl_dx11.h"
+
+//
+//___________________________________________________________
+// Author: Guildhall C33 - Son Nguyen
+// Title: Ragdoll Physics
+//___________________________________________________________
+//
 class Game;
 
 class App {

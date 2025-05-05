@@ -8,6 +8,12 @@ GameObject::GameObject(Game* game)
 
 }
 
+GameObject::GameObject(Game* game, DoubleMat44 transform)
+	:m_game(game), m_position(transform.GetTranslation3D()), m_orientation(transform.GetDoubleQuaternion())
+{
+
+}
+
 GameObject::~GameObject()
 {
 	delete m_vbuffer;
@@ -58,7 +64,7 @@ DoubleVec3 GameObject::GetInverseInertiaTensor() const
 
 void GameObject::AccumulateForce(DoubleVec3 force)
 {
-	if (m_isResting && force.GetLength() > FORCE_EXIT_REST_THRESHOLD)
+	if (m_isResting && force.GetLength() > m_game->DEBUG_forceThresholdExit)
 	{
 		m_isResting = false;
 	}
@@ -67,7 +73,7 @@ void GameObject::AccumulateForce(DoubleVec3 force)
 
 void GameObject::AccumulateAngularForce(DoubleVec3 torque)
 {
-	if (m_isResting && torque.GetLength() > FORCE_EXIT_REST_THRESHOLD)
+	if (m_isResting && torque.GetLength() > m_game->DEBUG_forceThresholdExit)
 	{
 		m_isResting = false;
 	}

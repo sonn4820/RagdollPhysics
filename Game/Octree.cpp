@@ -71,10 +71,10 @@ void Octree::Update()
 
 void Octree::Render() const
 {
-	if (!m_debugDraw) return;
-
-	g_theRenderer->BindTexture(nullptr);
 	g_theRenderer->BindShader(nullptr);
+	g_theRenderer->BindTexture(nullptr, 0);
+	g_theRenderer->BindTexture(nullptr, 1);
+	g_theRenderer->BindTexture(nullptr, 2);
 	g_theRenderer->SetDepthStencilMode(DepthMode::ENABLED);
 
 	Rgba8 color = Rgba8::COLOR_PINK;

@@ -102,10 +102,14 @@ public:
 	// UI
 	void Menu_Init();
 
+	void RaycastVsRagdolls();
+
 public:
 	Camera* m_screenCamera;
 	GameState m_currentState = GameState::ATTRACT_MODE;
 	GameState m_previousState = GameState::ATTRACT_MODE;
+
+	RaycastRagdollResult3D m_ragdollRaycastResult;
 
 	std::vector<GameObject*> m_allObjects;
 	Octree* m_octree = nullptr;
@@ -148,21 +152,38 @@ public:
 	bool DEBUG_breakable = false;
 	bool DEBUG_solveConstraintWithFixedIteration = true;
 	float DEBUG_ragdoll_deadTimer = 5.f;
+	float DEBUG_ragdoll_canRestTimer = 2.f;
 	bool DEBUG_allRagdollLiveForever = true;
 	bool DEBUG_gameObjectCanRest = true;
-	double DEBUG_maxVelocity = 200.0;
+	double DEBUG_maxVelocity = 200;
 	double DEBUG_posFixRate = 35.0;
 	double DEBUG_angleFixRate = 3.0;
-	FloatRange DEBUG_random_spawn_X = FloatRange(-40.f, 40.f);
-	FloatRange DEBUG_random_spawn_Y = FloatRange(-40.f, 40.f);
+	double DEBUG_restitution = 0.5;
+	double DEBUG_maxFriction = 0.5;
+	double DEBUG_contactCollisionThreshold = 1.5;
+	double DEBUG_springStiffness = 100.0;
+	double DEBUG_damping = 5.0;
+	double DEBUG_deltaImpulseLimit = 15;
+	double DEBUG_constraintNumLoop = 20;
+	FloatRange DEBUG_random_spawn_X = FloatRange(-10.f, 10.f);
+	FloatRange DEBUG_random_spawn_Y = FloatRange(-10.f, 10.f);
 	FloatRange DEBUG_random_spawn_Z = FloatRange(20.f, 40.f);
+
+	float DEBUG_forceThresholdExit = 200.f;
+	double DEBUG_velocityThresholdExit = 1;
+	bool DEBUG_wakeWithEnergy = false;
+	double DEBUG_energyThresholdExit = 80;
 
 	// GAME DEBUG
 	bool DEBUG_demoMode = false;
+	bool DEBUG_raycast = true;
 	unsigned int DEBUG_currentSeed = 0;
 	int DEBUG_desireSeed = -1;
 	bool DEBUG_isCameraMode = false;
-	bool DEBUG_drawDebug = false;
+	bool DEBUG_DebugDraw = false;
+	bool DEBUG_DebugDrawOctree = true;
+	bool DEBUG_DebugDrawBasis = true;
+	bool DEBUG_DebugDrawVel = true;
 	float DEBUG_previousDeltaSeconds = 0.0f;
 
 
@@ -212,4 +233,6 @@ private:
 	void RenderScreenWorld() const;
 	void DrawSkybox() const;
 	void DrawGrid() const;
+
+	void ToggleDebugDraw();
 };

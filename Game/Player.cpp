@@ -53,7 +53,30 @@ void Player::HandleInput()
 		return;
 	}
 
-	if (g_theGame->m_currentState == GameState::FEATURE_MODE)
+	if (g_theGame->m_currentState == GameState::CANNON_MODE)
+	{
+		if (g_theInput->IsKeyDown('W'))
+		{
+			m_velocity += Vec3(forwardDir.x, forwardDir.y, 0).GetNormalized() * m_movingSpeed;
+		}
+		if (g_theInput->IsKeyDown('S'))
+		{
+			m_velocity -= Vec3(forwardDir.x, forwardDir.y, 0).GetNormalized() * m_movingSpeed;
+		}
+		if (g_theInput->IsKeyDown('A'))
+		{
+			m_velocity += Vec3(rightDir.x, rightDir.y, 0).GetNormalized() * m_movingSpeed;
+		}
+		if (g_theInput->IsKeyDown('D'))
+		{
+			m_velocity -= Vec3(rightDir.x, rightDir.y, 0).GetNormalized() * m_movingSpeed;
+		}
+		if (g_theInput->IsKeyDown(KEYCODE_SHIFT))
+		{
+			m_velocity *= 10.f;
+		}
+	}
+	else
 	{
 		if (g_theInput->IsKeyDown('W'))
 		{
@@ -78,29 +101,6 @@ void Player::HandleInput()
 		if (g_theInput->IsKeyDown('E'))
 		{
 			m_velocity -= Vec3(0, 0, m_movingSpeed);
-		}
-		if (g_theInput->IsKeyDown(KEYCODE_SHIFT))
-		{
-			m_velocity *= 10.f;
-		}
-	}
-	if (g_theGame->m_currentState == GameState::CANNON_MODE)
-	{
-		if (g_theInput->IsKeyDown('W'))
-		{
-			m_velocity += Vec3(forwardDir.x, forwardDir.y, 0).GetNormalized() * m_movingSpeed;
-		}
-		if (g_theInput->IsKeyDown('S'))
-		{
-			m_velocity -= Vec3(forwardDir.x, forwardDir.y, 0).GetNormalized() * m_movingSpeed;
-		}
-		if (g_theInput->IsKeyDown('A'))
-		{
-			m_velocity += Vec3(rightDir.x, rightDir.y, 0).GetNormalized() * m_movingSpeed;
-		}
-		if (g_theInput->IsKeyDown('D'))
-		{
-			m_velocity -= Vec3(rightDir.x, rightDir.y, 0).GetNormalized() * m_movingSpeed;
 		}
 		if (g_theInput->IsKeyDown(KEYCODE_SHIFT))
 		{
