@@ -19,12 +19,11 @@ Game::~Game()
 //..............................
 void Game::Startup()
 {
-	float aspect = Window::GetMainWindowInstance()->GetAspect();
+	IntVec2 screenSize = Window::GetMainWindowInstance()->GetClientDimensions();
 	m_screenCamera = new Camera();
-	m_screenCamera->SetOrthographicView(Vec2(0, 0), Vec2(800.f * aspect, 800.f));
+	m_screenCamera->SetOrthographicView(Vec2(0, 0), Vec2((float)screenSize.x, (float)screenSize.y));
 	m_clock = new Clock(*Clock::s_theSystemClock);
 
-	SwitchState(GameState::ATTRACT_MODE);
 	m_planeTextureN = g_theRenderer->CreateOrGetTextureFromFile("Data/Images/Grass_Normal.png");
 	m_planeTextureS = g_theRenderer->CreateOrGetTextureFromFile("Data/Images/Grass_SpecGlossEmit.png");
 	m_planeTextureD = g_theRenderer->CreateOrGetTextureFromFile("Data/Images/Grass_Diffuse.png");
@@ -54,12 +53,13 @@ void Game::Startup()
 	g_theRenderer->CopyCPUToGPU(m_planeVerts.data(), (int)(m_planeVerts.size() * sizeof(Vertex_PCUTBN)), m_planeVBO);
 	g_theRenderer->CopyCPUToGPU(m_planeIndexes.data(), (int)(m_planeIndexes.size() * sizeof(unsigned int)), m_planeIBO);
 
-	m_ragdolls.reserve(20);
+	m_ragdolls.reserve(40);
 	m_allObjects.reserve(400);
 	m_fixedObjects.reserve(30);
 
 	Menu_Init();
 
+	SwitchState(GameState::ATTRACT_MODE); // Player Init here
 }
 //----------------------------------------------------------------------------------------------------------------------------------------
 // UPDATE
@@ -67,8 +67,6 @@ void Game::Startup()
 void Game::Update(float deltaSeconds)
 {
 	m_secondIntoMode += deltaSeconds;
-
-	if (m_octree) m_octree->m_debugDraw = DEBUG_drawDebug;
 
 	HandleInput();
 
@@ -79,12 +77,6 @@ void Game::Update(float deltaSeconds)
 	else
 	{
 		IMGUI_UPDATE();
-
-		DebugAddScreenText(Stringf("Time: %.1f, FPS: %.1f, Scale: %.1f", Clock::s_theSystemClock->GetTotalSeconds(), 1.f / Clock::s_theSystemClock->GetDeltaSeconds(), Clock::s_theSystemClock->GetTimeScale()),
-			Vec2(800.f, 780.f), 15.f);
-
-		DebugAddScreenText(Stringf("Delta Time: %.8f", deltaSeconds), Vec2(800.f, 760.f), 15.f);
-		DebugAddScreenText(Stringf("Total Physics Objects: %i", m_allObjects.size()), Vec2(800.f, 740.f), 15.f);
 	}
 
 	if (m_currentState == GameState::FEATURE_MODE)
@@ -103,21 +95,9 @@ void Game::Update(float deltaSeconds)
 //..............................
 void Game::UpdateFeatureMode(float deltaSeconds)
 {
-	m_timeDebt += deltaSeconds;
-	while (m_timeDebt >= m_fixedTimeStep)
-	{
-		for (auto& r : m_ragdolls)
-		{
-			r->FixedUpdate(m_fixedTimeStep);
-			PushRagdollOutOfDefaultPlane3D_Double(r);
-		}
+	Update_Ragdolls(deltaSeconds);
 
-		m_octree->Update(deltaSeconds);
-
-		m_timeDebt -= m_fixedTimeStep;
-	}
-
-	if (DEBUG_drawDebug)
+	if (DEBUG_DebugDraw)
 	{
 		DebugAddWorldBasis(Mat44(), 0);
 
@@ -135,99 +115,30 @@ void Game::UpdateFeatureMode(float deltaSeconds)
 		DebugAddWorldText("Z - UP", textZTransform, 0.2f, Vec2(0.5f, 0.5f), 0, Rgba8::COLOR_BLUE);
 	}
 
-	for (auto& r : m_ragdolls)
-	{
-		r->Update(deltaSeconds);
-	}
-	if (DEBUG_allRagdollLiveForever)
-	{
-		for (auto& r : m_ragdolls)
-		{
-			r->m_isDead = false;
-		}
-	}
-
 	m_player->Update(deltaSeconds);
 
 	DEBUG_previousDeltaSeconds = deltaSeconds;
 
 	if (g_theInput->WasKeyJustPressed('H'))
 	{
-		SpawnRagdoll(Mat44::CreateTranslation3D(Vec3(0, 0, 20)), Rgba8::GetRandomColor(false));
+		Mat44 matrix = Mat44::CreateTranslation3D(Vec3(DEBUG_spawn_X, DEBUG_spawn_Y, DEBUG_spawn_Z));
+		matrix.AppendZRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+		matrix.AppendYRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+		matrix.AppendXRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+		SpawnRagdoll(matrix, Rgba8::GetRandomColor(false), Vec3::ZERO);
 	}
 
-	if (!DEBUG_isCameraMode)
+	if (DEBUG_raycast && !DEBUG_isCameraMode)
 	{
-		if (m_ragdolls.empty()) return;
-
-		if (g_theInput->IsKeyDown('A'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 1, 0) * -DEBUG_NodeMoveSpeed * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
-		if (g_theInput->IsKeyDown('D'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 1, 0) * DEBUG_NodeMoveSpeed * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
-		if (g_theInput->IsKeyDown('W'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(1, 0, 0) * -DEBUG_NodeMoveSpeed * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
-		if (g_theInput->IsKeyDown('S'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(1, 0, 0) * DEBUG_NodeMoveSpeed * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
-		if (g_theInput->IsKeyDown('Q'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 0, 1) * DEBUG_NodeMoveSpeed * 2 * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
-		if (g_theInput->IsKeyDown('E'))
-		{
-			m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 0, 1) * -DEBUG_NodeMoveSpeed * 2 * deltaSeconds);
-			m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
-		}
+		RaycastVsRagdolls();
 	}
 }
 
 void Game::UpdatePachinkoMode(float deltaSeconds)
 {
-	DEBUG_isCameraMode = false;
+	//DEBUG_isCameraMode = false;
 
-	m_timeDebt += deltaSeconds;
-	while (m_timeDebt >= m_fixedTimeStep)
-	{
-		for (auto& r : m_ragdolls)
-		{
-			r->FixedUpdate(m_fixedTimeStep);
-			PushRagdollOutOfDefaultPlane3D_Double(r);
-		}
-
-		m_octree->Update(deltaSeconds);
-
-		m_timeDebt -= m_fixedTimeStep;
-	}
-
-	if (m_ragdolls.size() > RAGDOLLS_LIMIT)
-	{
-		DeleteRagdoll(m_ragdolls.front());
-	}
-
-	for (auto& r : m_ragdolls)
-	{
-		r->Update(deltaSeconds);
-	}
-
-	if (DEBUG_allRagdollLiveForever)
-	{
-		for (auto& r : m_ragdolls)
-		{
-			r->m_isDead = false;
-		}
-	}
+	Update_Ragdolls(deltaSeconds);
 
 	if (DEBUG_demoMode)
 	{
@@ -256,7 +167,7 @@ void Game::UpdatePachinkoMode(float deltaSeconds)
 					matrix.AppendXRotation(g_theRNG->RollRandomFloatInRange(0, 360));
 				}
 
-				SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, 15.f, DEBUG_breakable);
+				SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, Vec3::ZERO);
 
 				m_reachDestination = true;
 			}
@@ -269,74 +180,64 @@ void Game::UpdatePachinkoMode(float deltaSeconds)
 	}
 	else
 	{
-		float speedCursor = 10.f;
-		if (g_theInput->IsKeyDown('A'))
-		{
-			m_pachinkoCursor += Vec3(0, 1, 0) * -speedCursor * deltaSeconds;
-		}
-		if (g_theInput->IsKeyDown('D'))
-		{
-			m_pachinkoCursor += Vec3(0, 1, 0) * speedCursor * deltaSeconds;
-		}
-		if (g_theInput->IsKeyDown('W'))
-		{
-			m_pachinkoCursor += Vec3(1, 0, 0) * -speedCursor * deltaSeconds;
-		}
-		if (g_theInput->IsKeyDown('S'))
-		{
-			m_pachinkoCursor += Vec3(1, 0, 0) * speedCursor * deltaSeconds;
-		}
-		if (g_theInput->IsKeyDown('Q'))
-		{
-			m_pachinkoCursor += Vec3(0, 0, 1) * speedCursor * deltaSeconds;
-		}
-		if (g_theInput->IsKeyDown('E'))
-		{
-			m_pachinkoCursor += Vec3(0, 0, 1) * -speedCursor * deltaSeconds;
-		}
+		m_player->Update(deltaSeconds);
 
-		m_pachinkoCursor = Clamp(m_pachinkoCursor, Vec3(-20, -28, 65), Vec3(-8, 28, 90));
-
-		if (g_theInput->WasKeyJustPressed(KEYCODE_SPACE))
+		if (!DEBUG_isCameraMode)
 		{
-			Mat44 matrix = Mat44::CreateTranslation3D(m_pachinkoCursor);
-			if (DEBUG_randomRotation)
+			float speedCursor = 10.f;
+			if (g_theInput->IsKeyDown('A'))
 			{
-				matrix.AppendZRotation(g_theRNG->RollRandomFloatInRange(0, 360));
-				matrix.AppendYRotation(g_theRNG->RollRandomFloatInRange(0, 360));
-				matrix.AppendXRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+				m_pachinkoCursor += Vec3(0, 1, 0) * -speedCursor * deltaSeconds;
+			}
+			if (g_theInput->IsKeyDown('D'))
+			{
+				m_pachinkoCursor += Vec3(0, 1, 0) * speedCursor * deltaSeconds;
+			}
+			if (g_theInput->IsKeyDown('W'))
+			{
+				m_pachinkoCursor += Vec3(1, 0, 0) * -speedCursor * deltaSeconds;
+			}
+			if (g_theInput->IsKeyDown('S'))
+			{
+				m_pachinkoCursor += Vec3(1, 0, 0) * speedCursor * deltaSeconds;
+			}
+			if (g_theInput->IsKeyDown('Q'))
+			{
+				m_pachinkoCursor += Vec3(0, 0, 1) * speedCursor * deltaSeconds;
+			}
+			if (g_theInput->IsKeyDown('E'))
+			{
+				m_pachinkoCursor += Vec3(0, 0, 1) * -speedCursor * deltaSeconds;
 			}
 
-			SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, 15.f, DEBUG_breakable);
+			m_pachinkoCursor = Clamp(m_pachinkoCursor, Vec3(-20, -28, 65), Vec3(-8, 28, 90));
+
+			if (g_theInput->WasKeyJustPressed(KEYCODE_SPACE))
+			{
+				Mat44 matrix = Mat44::CreateTranslation3D(m_pachinkoCursor);
+				if (DEBUG_randomRotation)
+				{
+					matrix.AppendZRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+					matrix.AppendYRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+					matrix.AppendXRotation(g_theRNG->RollRandomFloatInRange(0, 360));
+				}
+
+				SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, Vec3::ZERO);
+			}
 		}
+
+	}
+
+
+	if (DEBUG_raycast && !DEBUG_isCameraMode)
+	{
+		RaycastVsRagdolls();
 	}
 }
 
 void Game::UpdateCannonMode(float deltaSeconds)
 {
-	m_timeDebt += deltaSeconds;
-	while (m_timeDebt >= m_fixedTimeStep)
-	{
-		for (auto& r : m_ragdolls)
-		{
-			r->FixedUpdate(m_fixedTimeStep);
-			PushRagdollOutOfDefaultPlane3D_Double(r);
-		}
-
-		m_octree->Update(deltaSeconds);
-
-		m_timeDebt -= m_fixedTimeStep;
-	}
-
-	if (m_ragdolls.size() > RAGDOLLS_LIMIT)
-	{
-		DeleteRagdoll(m_ragdolls.front());
-	}
-
-	for (auto& r : m_ragdolls)
-	{
-		r->Update(deltaSeconds);
-	}
+	Update_Ragdolls(deltaSeconds);
 
 	m_player->Update(deltaSeconds);
 
@@ -350,7 +251,7 @@ void Game::UpdateCannonMode(float deltaSeconds)
 	{
 		Mat44 matrix = Mat44::CreateLookForward(-m_player->GetForward());
 		matrix.SetTranslation3D(m_player->m_position);
-		SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, 15.f, DEBUG_breakable, m_player->GetForward() * m_cannonForce);
+		SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE, m_player->GetForward() * m_cannonForce);
 		m_cannonForce = 0.f;
 	}
 	if (g_theInput->WasKeyJustReleased(KEYCODE_RIGHT_MOUSE) && DEBUG_isCameraMode)
@@ -408,7 +309,9 @@ void Game::RenderFeatureMode() const
 	g_theRenderer->BindTexture(m_planeTextureS, 2);
 	g_theRenderer->DrawIndexedBuffer(m_planeVBO, m_planeIBO, m_planeIndexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (DEBUG_drawDebug)
+	DrawSkybox();
+
+	if (DEBUG_DebugDraw)
 	{
 		DrawGrid();
 	}
@@ -425,9 +328,33 @@ void Game::RenderFeatureMode() const
 		fixedObject->Render();
 	}
 
-	m_octree->Render();
+	if (DEBUG_DebugDraw && DEBUG_DebugDrawOctree)
+	{
+		m_octree->Render();
+	}
 
-	DrawSkybox();
+	if (DEBUG_raycast)
+	{
+		std::vector<Vertex_PCU> raycast;
+		if (m_ragdollRaycastResult.m_didImpact)
+		{
+			AddVertsForCylinder3D(raycast, m_ragdollRaycastResult.m_rayStartPos, m_ragdollRaycastResult.m_impactPos, 0.025f, Rgba8::COLOR_GREEN);
+			AddVertsForSphere(raycast, m_ragdollRaycastResult.m_impactPos, 0.035f);
+			AddVertsForArrow3D(raycast, m_ragdollRaycastResult.m_impactPos, m_ragdollRaycastResult.m_impactPos + m_ragdollRaycastResult.m_rayFwdNormal * (m_ragdollRaycastResult.m_rayMaxLength - m_ragdollRaycastResult.m_impactDist), 0.025f, Rgba8::COLOR_DARK_RED);
+		}
+		else
+		{
+			AddVertsForArrow3D(raycast, m_ragdollRaycastResult.m_rayStartPos, m_ragdollRaycastResult.m_rayStartPos + m_ragdollRaycastResult.m_rayFwdNormal * m_ragdollRaycastResult.m_rayMaxLength, 0.025f, Rgba8::COLOR_DARK_GRAY);
+		}
+		g_theRenderer->BindShader(nullptr);
+		g_theRenderer->BindTexture(nullptr, 0);
+		g_theRenderer->BindTexture(nullptr, 1);
+		g_theRenderer->BindTexture(nullptr, 2);
+		g_theRenderer->SetRasterizerMode(RasterizerMode::SOLID_CULL_BACK);
+		g_theRenderer->SetDepthStencilMode(DepthMode::ENABLED);
+		g_theRenderer->SetModelConstants();
+		g_theRenderer->DrawVertexArray(raycast.size(), raycast.data());
+	}
 
 	g_theRenderer->EndCamera(*m_player->GetCamera());
 }
@@ -447,6 +374,8 @@ void Game::RenderPachinkoMode() const
 	g_theRenderer->BindTexture(m_planeTextureS, 2);
 	g_theRenderer->DrawIndexedBuffer(m_planeVBO, m_planeIBO, m_planeIndexes.size(), 0, VertexType::Vertex_PCUTBN);
 
+	DrawSkybox();
+
 	for (auto& r : m_ragdolls)
 	{
 		r->Render();
@@ -459,7 +388,10 @@ void Game::RenderPachinkoMode() const
 		fixedObject->Render();
 	}
 
-	m_octree->Render();
+	if (DEBUG_DebugDraw && DEBUG_DebugDrawOctree)
+	{
+		m_octree->Render();
+	}
 
 	std::vector<Vertex_PCU> cursorVerts;
 	AddVertsForSphere(cursorVerts, m_pachinkoCursor, 1.f, Rgba8::COLOR_RED);
@@ -472,7 +404,29 @@ void Game::RenderPachinkoMode() const
 	g_theRenderer->SetModelConstants();
 	g_theRenderer->DrawVertexArray(cursorVerts.size(), cursorVerts.data());
 
-	DrawSkybox();
+
+	if (DEBUG_raycast)
+	{
+		std::vector<Vertex_PCU> raycast;
+		if (m_ragdollRaycastResult.m_didImpact)
+		{
+			AddVertsForCylinder3D(raycast, m_ragdollRaycastResult.m_rayStartPos, m_ragdollRaycastResult.m_impactPos, 0.025f, Rgba8::COLOR_GREEN);
+			AddVertsForSphere(raycast, m_ragdollRaycastResult.m_impactPos, 0.035f);
+			AddVertsForArrow3D(raycast, m_ragdollRaycastResult.m_impactPos, m_ragdollRaycastResult.m_impactPos + m_ragdollRaycastResult.m_rayFwdNormal * (m_ragdollRaycastResult.m_rayMaxLength - m_ragdollRaycastResult.m_impactDist), 0.025f, Rgba8::COLOR_DARK_RED);
+		}
+		else
+		{
+			AddVertsForArrow3D(raycast, m_ragdollRaycastResult.m_rayStartPos, m_ragdollRaycastResult.m_rayStartPos + m_ragdollRaycastResult.m_rayFwdNormal * m_ragdollRaycastResult.m_rayMaxLength, 0.025f, Rgba8::COLOR_DARK_GRAY);
+		}
+		g_theRenderer->BindShader(nullptr);
+		g_theRenderer->BindTexture(nullptr, 0);
+		g_theRenderer->BindTexture(nullptr, 1);
+		g_theRenderer->BindTexture(nullptr, 2);
+		g_theRenderer->SetRasterizerMode(RasterizerMode::SOLID_CULL_BACK);
+		g_theRenderer->SetDepthStencilMode(DepthMode::ENABLED);
+		g_theRenderer->SetModelConstants();
+		g_theRenderer->DrawVertexArray(raycast.size(), raycast.data());
+	}
 
 	g_theRenderer->EndCamera(*m_player->GetCamera());
 }
@@ -504,7 +458,10 @@ void Game::RenderCannonMode() const
 		fixedObject->Render();
 	}
 
-	m_octree->Render();
+	if (DEBUG_DebugDraw && DEBUG_DebugDrawOctree)
+	{
+		m_octree->Render();
+	}
 
 	DrawSkybox();
 
@@ -571,18 +528,6 @@ void Game::RenderScreenWorld() const
 		AddVertsForAABB2D(UIVerts, screenBound, Rgba8::DARK);
 	}
 
-	//if (m_gameState == GameState::PACHINKO_MODE)
-	//{
-	//	std::vector<Vertex_PCU> textVerts;
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 770), 20.f, "Key List:", Rgba8::COLOR_DARK_RED);
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 750), 20.f, "WASD  to move the cursor", Rgba8::COLOR_BLACK);
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 730), 20.f, "QE    to elevate the cursor", Rgba8::COLOR_BLACK);
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 710), 20.f, "Space to spawn ragdoll", Rgba8::COLOR_BLACK);
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 690), 20.f, "R     to randomize the scene", Rgba8::COLOR_BLACK);
-	//	g_theFont->AddVertsForText2D(textVerts, Vec2(50, 670), 20.f, "ESC   to back to the menu", Rgba8::COLOR_BLACK);
-
-	//}
-
 	g_theRenderer->SetModelConstants();
 	g_theRenderer->BindTexture(&g_theFont->GetTexture());
 	g_theRenderer->BindShader(nullptr);
@@ -600,7 +545,9 @@ void Game::DrawSkybox() const
 {
 	std::vector<Vertex_PCU> skyBoxVerts;
 
-	AddVertsForSkyBox(skyBoxVerts, AABB3(-1024, -1024, -1524, 1024, 1024, 524), Rgba8::COLOR_LIGHT_GRAY);
+	AddVertsForSkyBox(skyBoxVerts, AABB3(-1024, -1024, -1224, 1024, 1024, 824), Rgba8::COLOR_LIGHT_GRAY);
+
+	g_theRenderer->SetRasterizerMode(RasterizerMode::SOLID_CULL_NONE);
 	g_theRenderer->SetModelConstants();
 	g_theRenderer->BindTexture(m_skyboxTexture);
 	g_theRenderer->BindTexture(nullptr, 1);
@@ -632,6 +579,8 @@ void Game::Shutdown()
 
 void Game::Restart()
 {
+	m_ragdollRaycastResult = RaycastRagdollResult3D();
+
 	if (m_currentState == GameState::FEATURE_MODE)
 	{
 		FeatureModeRestart();
@@ -644,6 +593,8 @@ void Game::Restart()
 	{
 		CannonModeRestart();
 	}
+
+	UpdateAllCurrentRagdolls();
 }
 
 void Game::Init_Ragdolls()
@@ -662,7 +613,7 @@ void Game::Init_Ragdolls()
 	mainMatrix.AppendZRotation(DEBUG_spawn_Yaw);
 	mainMatrix.AppendYRotation(DEBUG_spawn_Pitch);
 	mainMatrix.AppendXRotation(DEBUG_spawn_Roll);
-	SpawnRagdoll(mainMatrix, color);
+	SpawnRagdoll(mainMatrix, color, Vec3::ZERO);
 
 	for (size_t a = 0; a < m_numberOfRagdolls - 1; a++)
 	{
@@ -676,17 +627,192 @@ void Game::Init_Ragdolls()
 		matrix.AppendYRotation(g_theRNG->RollRandomFloatInRange(0, 360));
 		matrix.AppendXRotation(g_theRNG->RollRandomFloatInRange(0, 360));
 
-		SpawnRagdoll(matrix, Rgba8::COLOR_RAGDOLL_NODE);
+		SpawnRagdoll(matrix, Rgba8::GetRandomColor(false), Vec3::ZERO);
 	}
 }
 
 void Game::Init_Octree()
 {
 	m_octree = new Octree(DoubleAABB3(-1024, -1024, -1024, 1024, 1024, 1024), m_allObjects);
-	m_octree->m_debugDraw = DEBUG_drawDebug;
 	m_octree->m_isRoot = true;
 	m_octree->Init();
 	m_octree->UpdateTree();
+}
+
+void Game::Update_Ragdolls(float deltaSeconds)
+{
+	if (DEBUG_usingMultithreading)
+	{
+		ManagingRagdolls_Multi_Threaded(deltaSeconds);
+	}
+	else
+	{
+		ManagingRagdolls_Single_Threaded(deltaSeconds);
+	}
+
+
+	if (m_currentState == GameState::PACHINKO_MODE || m_currentState == GameState::CANNON_MODE)
+	{
+		if (m_ragdolls.size() > RAGDOLLS_LIMIT)
+		{
+			DeleteRagdoll(m_ragdolls.front());
+		}
+	}
+
+	if (m_currentState == GameState::FEATURE_MODE)
+	{
+		if (!DEBUG_isCameraMode)
+		{
+			if (m_ragdolls.empty()) return;
+
+			if (g_theInput->IsKeyDown('A'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 1, 0) * -DEBUG_NodeMoveSpeed * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+			if (g_theInput->IsKeyDown('D'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 1, 0) * DEBUG_NodeMoveSpeed * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+			if (g_theInput->IsKeyDown('W'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(1, 0, 0) * -DEBUG_NodeMoveSpeed * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+			if (g_theInput->IsKeyDown('S'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(1, 0, 0) * DEBUG_NodeMoveSpeed * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+			if (g_theInput->IsKeyDown('Q'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 0, 1) * DEBUG_NodeMoveSpeed * 2 * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+			if (g_theInput->IsKeyDown('E'))
+			{
+				m_ragdolls[0]->ApplyGlobalAcceleration(DoubleVec3(0, 0, 1) * -DEBUG_NodeMoveSpeed * 2 * deltaSeconds);
+				m_ragdolls[0]->m_deadTimer = DEBUG_ragdoll_deadTimer;
+				m_ragdolls[0]->m_timeSinceSpawn = 0.f;
+			}
+		}
+	}
+}
+
+void Game::ManagingRagdolls_Single_Threaded(float deltaSeconds)
+{
+	if (m_ragdolls.empty() || !m_octree) return;
+
+	for (auto& r : m_ragdolls)
+	{
+		r->Update(deltaSeconds);
+
+		if (DEBUG_allRagdollLiveForever)
+		{
+			r->m_isDead = false;
+		}
+	}
+
+	m_timeDebt += deltaSeconds;
+	while (m_timeDebt >= m_fixedTimeStep)
+	{
+		for (auto& r : m_ragdolls)
+		{
+			r->SolveOneIteration(m_fixedTimeStep);
+		}
+
+		m_octree->Update();
+
+		m_timeDebt -= m_fixedTimeStep;
+	}
+}
+
+void Game::ManagingRagdolls_Multi_Threaded(float deltaSeconds)
+{
+	if (m_ragdolls.empty() || !m_octree) return;
+
+	// Process completed jobs from previous frames
+	for (size_t i = 0; i < g_theJobSystem->GetNumCompletedJobs(); i++)
+	{
+		Job* job = g_theJobSystem->RetrieveJob();
+		delete job;
+	}
+
+	size_t numActiveRagdolls = 0;
+	for (auto& ragdoll : m_ragdolls)
+	{
+		if (!ragdoll) continue;
+
+		ragdoll->Update(deltaSeconds);
+
+		if (DEBUG_allRagdollLiveForever)
+		{
+			ragdoll->m_isDead = false;
+		}
+
+		if (!ragdoll->m_isDead)
+		{
+			numActiveRagdolls++;
+		}
+	}
+
+	if (numActiveRagdolls == 0)
+	{
+		m_octree->Update();
+		return;
+	}
+
+	bool useMultithreading = (numActiveRagdolls >= MULTITHREADING_THRESHOLD);
+	int iterations = IntMax(1, (int)(deltaSeconds / m_fixedTimeStep));
+
+	// Single-threaded 
+	if (!useMultithreading)
+	{
+		m_timeDebt += deltaSeconds;
+		while (m_timeDebt >= m_fixedTimeStep)
+		{
+			for (auto& r : m_ragdolls)
+			{
+				r->SolveOneIteration(m_fixedTimeStep);
+			}
+
+			m_octree->Update();
+			m_timeDebt -= m_fixedTimeStep;
+		}
+
+		return;
+	}
+
+	//-------------------------------------------------------------
+	// Multi-threaded 
+
+	for (size_t i = 0; i < iterations; i++)
+	{
+		for (auto& ragdoll : m_ragdolls)
+		{
+			if (ragdoll && !ragdoll->m_isDead)
+			{
+				// Create job for this ragdoll with fixed timesteps
+				RagdollPhysicsJob* job = new RagdollPhysicsJob(ragdoll, m_fixedTimeStep);
+				g_theJobSystem->QueueJob(job);
+			}
+		}
+
+		while (g_theJobSystem->GetNumCompletedJobs() > 0)
+		{
+			Job* job = g_theJobSystem->RetrieveJob();
+			delete job;
+		}
+
+		m_octree->Update();
+	}
+
 }
 
 void Game::IMGUI_UPDATE()
@@ -697,6 +823,34 @@ void Game::IMGUI_UPDATE()
 	ImGui::Begin("Ragdoll Control Panel");
 	ImGui::SetWindowCollapsed(false, 2);
 	ImGui::SetWindowSize(ImVec2(500, 800));
+	ImGui::SeparatorText("App Stats");
+	g_theApp->ShowFPSGraph();
+	ImGui::Dummy(ImVec2(0.0f, 2.0f));
+	ImGui::Text("Current DeltaSecond: %.3f", m_clock->GetDeltaSeconds());
+	ImGui::Text("Total Physics Objects: %i", m_allObjects.size());
+	ImGui::Text("Total Ragdolls: %i", m_ragdolls.size());
+	int constraintNum = 0;
+	for (auto& ragdoll : m_ragdolls)
+	{
+		constraintNum += (int)ragdoll->GetConstraints().size();
+	}
+	ImGui::Text("Total Constraints: %i", constraintNum);
+
+	ImGui::Spacing();
+	//if (DEBUG_usingMultithreading)
+	//{
+	//	ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+	//}
+	//else
+	//{
+	//	ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	//}
+	//ImGui::Button("Using Multi-threading", ImVec2(250, 30));
+	//if (ImGui::IsItemClicked(0))
+	//{
+	//	DEBUG_usingMultithreading = !DEBUG_usingMultithreading;
+	//}
+	//ImGui::PopStyleColor(1);
 
 	if (m_currentState == GameState::FEATURE_MODE)
 	{
@@ -720,6 +874,7 @@ void Game::IMGUI_UPDATE()
 		ImGui::Text("QE    to elevate the cursor");
 		ImGui::Text("Space to spawn ragdoll");
 		ImGui::Text("R     to randomize the scene");
+		ImGui::Text("F1	to toggle Mouse Mode");
 		ImGui::Text("F2    to toggle Debug Draw");
 		ImGui::Text("F3    to toggle Breakable Ragdoll");
 		ImGui::Text("ESC   to back to the menu");
@@ -753,24 +908,21 @@ void Game::IMGUI_UPDATE()
 		Restart();
 	}
 
-	if (m_currentState == GameState::FEATURE_MODE || m_currentState == GameState::CANNON_MODE)
+	ImGui::SameLine();
+	if (DEBUG_isCameraMode)
 	{
-		ImGui::SameLine();
-		if (DEBUG_isCameraMode)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
-		}
-		else
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
-		}
-		ImGui::Button("Change Camera mode (F1)", ImVec2(170, 30));
-		if (ImGui::IsItemClicked(0))
-		{
-			DEBUG_isCameraMode = !DEBUG_isCameraMode;
-		}
-		ImGui::PopStyleColor(1);
+		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
 	}
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	}
+	ImGui::Button("Change Camera mode (F1)", ImVec2(170, 30));
+	if (ImGui::IsItemClicked(0))
+	{
+		DEBUG_isCameraMode = !DEBUG_isCameraMode;
+	}
+	ImGui::PopStyleColor(1);
 
 	if (m_currentState == GameState::PACHINKO_MODE)
 	{
@@ -839,9 +991,53 @@ void Game::IMGUI_UPDATE()
 	}
 	ImGui::PopStyleColor(1);
 
-	ImGui::SeparatorText("Octree");
+	if (m_currentState == GameState::FEATURE_MODE || m_currentState == GameState::PACHINKO_MODE)
+	{
+		ImGui::SeparatorText("Debug Raycast");
 
-	if (DEBUG_drawDebug)
+		if (DEBUG_raycast)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+		}
+
+		ImGui::Button("Toggle Raycast [F4]", ImVec2(180, 30));
+		if (ImGui::IsItemClicked(0))
+		{
+			DEBUG_raycast = !DEBUG_raycast;
+		}
+		ImGui::PopStyleColor(1);
+
+		if (m_ragdollRaycastResult.m_didImpact)
+		{
+			Node* n = m_ragdollRaycastResult.m_hitNode;
+			if (n)
+			{
+				ImGui::Begin("Raycast Result");
+				ImGui::SetWindowSize(ImVec2(350, 120));
+				ImGui::Text("Node: %s", n->m_name.c_str());
+				ImGui::Text("Total Constraints: %i", (int)m_ragdollRaycastResult.m_hitConstraints.size());
+				ImGui::Text("Is Resting: %s", (n->m_isResting) ? "true" : "false");
+				ImGui::Text("Total Energy: %.2f", GetTotalEnergy(n->m_velocity, n->m_mass, m_ragdolls[0]->m_config.gravAccel, n->m_position.z));
+				if (DEBUG_wakeWithEnergy)
+				{
+					ImGui::SameLine();
+					ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1), "(wake if above: %.2f)", DEBUG_energyThresholdExit);
+				}
+				ImGui::Text("Velocity Magnitude: %.2f", n->m_velocity.GetLength());
+				ImGui::SameLine();
+				ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1), "(rest if below: %.2f)", DEBUG_velocityThresholdExit);
+				ImGui::End();
+			}
+		}
+	}
+
+	ImGui::SeparatorText("Debug Draw");
+
+	if (DEBUG_DebugDraw)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
 	}
@@ -853,9 +1049,74 @@ void Game::IMGUI_UPDATE()
 	ImGui::Button("Render Debug (F2)", ImVec2(150, 30));
 	if (ImGui::IsItemClicked(0))
 	{
-		DEBUG_drawDebug = !DEBUG_drawDebug;
+		ToggleDebugDraw();
 	}
 	ImGui::PopStyleColor(1);
+
+	if (DEBUG_DebugDraw)
+	{
+		if (DEBUG_DebugDrawOctree)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+		}
+		ImGui::Button("Draw Octree", ImVec2(150, 30));
+		if (ImGui::IsItemClicked(0))
+		{
+			DEBUG_DebugDrawOctree = !DEBUG_DebugDrawOctree;
+		}
+		ImGui::PopStyleColor(1);
+		if (DEBUG_DebugDrawOctree)
+		{
+			ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.6f, 1), "Pink: Octree regions");
+			ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1), "Cyan: Object's bounding box");
+		}
+
+		if (DEBUG_DebugDrawBasis)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+		}
+		ImGui::Button("Draw Basis", ImVec2(150, 30));
+		if (ImGui::IsItemClicked(0))
+		{
+			DEBUG_DebugDrawBasis = !DEBUG_DebugDrawBasis;
+		}
+		ImGui::PopStyleColor(1);
+		if (DEBUG_DebugDrawBasis)
+		{
+			ImGui::TextColored(ImVec4(1.0f, 0.f, 0.f, 1), "Red: I Basis");
+			ImGui::TextColored(ImVec4(0.f, 1.0f, 0.0f, 1), "Green: J Basis");
+			ImGui::TextColored(ImVec4(0.f, 0.0f, 1.0f, 1), "Blue: K Basis");
+			ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "Gray: Node's Relation");
+		}
+
+		if (DEBUG_DebugDrawVel)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+		}
+		ImGui::Button("Draw Velocities", ImVec2(150, 30));
+		if (ImGui::IsItemClicked(0))
+		{
+			DEBUG_DebugDrawVel = !DEBUG_DebugDrawVel;
+		}
+		ImGui::PopStyleColor(1);
+		if (DEBUG_DebugDrawVel)
+		{
+			ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1), "Yellow: Velocity");
+			ImGui::TextColored(ImVec4(0.81f, 0.62f, 1.0f, 1), "Purple: Angular Velocity");
+		}
+	}
 
 	// FEATURE MODE ______________________________________________________________________________________________
 	if (m_currentState == GameState::FEATURE_MODE)
@@ -897,18 +1158,18 @@ void Game::IMGUI_UPDATE()
 			m_ragdollDebugType = 3;
 			Restart();
 		}
-		ImGui::Button("Sphere", ImVec2(70, 30)); ImGui::SameLine();
-		if (ImGui::IsItemClicked(0))
-		{
-			m_ragdollDebugType = 1;
-			Restart();
-		}
-		ImGui::Button("Capsule", ImVec2(70, 30));
-		if (ImGui::IsItemClicked(0))
-		{
-			m_ragdollDebugType = 2;
-			Restart();
-		}
+		//ImGui::Button("Sphere", ImVec2(70, 30)); ImGui::SameLine();
+		//if (ImGui::IsItemClicked(0))
+		//{
+		//	m_ragdollDebugType = 1;
+		//	Restart();
+		//}
+		//ImGui::Button("Capsule", ImVec2(70, 30));
+		//if (ImGui::IsItemClicked(0))
+		//{
+		//	m_ragdollDebugType = 2;
+		//	Restart();
+		//}
 
 		ImGui::Dummy(ImVec2(0.0f, 4.0f));
 		ImGui::Button("Spawn", ImVec2(150, 30)); ImGui::SameLine();
@@ -916,44 +1177,12 @@ void Game::IMGUI_UPDATE()
 		{
 			Restart();
 		}
-		ImGui::Button("Drop 1 Ragdoll", ImVec2(150, 30));
+		ImGui::Button("Drop 1 Ragdoll (H)", ImVec2(150, 30));
 		if (ImGui::IsItemClicked(0))
 		{
-			SpawnRagdoll(Mat44::CreateTranslation3D(Vec3(0, 0, 20)), Rgba8::GetRandomColor(false));
+			SpawnRagdoll(Mat44::CreateTranslation3D(Vec3(DEBUG_spawn_X, DEBUG_spawn_Y, DEBUG_spawn_Z)), Rgba8::GetRandomColor(false), Vec3::ZERO);
 		}
 		ImGui::Dummy(ImVec2(0.0f, 4.0f));
-
-		ImGui::SeparatorText("Ragdoll Dead Setting");
-
-		ImGui::InputFloat("Ragdoll Dead Timer", &DEBUG_ragdoll_deadTimer, 0.0, 0.0, "%.2f");
-		ImGui::Dummy(ImVec2(0.0f, 4.0f));
-
-		if (DEBUG_allRagdollLiveForever)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
-		}
-		else
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
-		}
-
-		ImGui::Button("All Ragdoll Alive Forever", ImVec2(250, 30));
-		if (ImGui::IsItemClicked(0))
-		{
-			DEBUG_allRagdollLiveForever = !DEBUG_allRagdollLiveForever;
-
-			if (!DEBUG_allRagdollLiveForever)
-			{
-				for (auto& r : m_ragdolls)
-				{
-					if (r->m_deadTimer <= 1.f)
-					{
-						r->m_deadTimer = 1.f;
-					}
-				}
-			}
-		}
-		ImGui::PopStyleColor(1);
 	}
 
 	if (m_currentState == GameState::PACHINKO_MODE)
@@ -979,30 +1208,15 @@ void Game::IMGUI_UPDATE()
 	}
 	//  ______________________________________________________________________________________________
 
-	ImGui::SeparatorText("Ragdoll Breakable Setting");
+	ImGui::SeparatorText("Ragdoll Setting");
 	ImGui::PushItemWidth(75);
-	if (DEBUG_breakable)
-	{
-		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
-	}
-	else
-	{
-		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
-	}
 
-	ImGui::Button("Breakable Ragdoll (F3)", ImVec2(250, 30));
-	if (ImGui::IsItemClicked(0))
-	{
-		DEBUG_breakable = !DEBUG_breakable;
+	ImGui::InputFloat("Ragdoll Dead Timer", &DEBUG_ragdoll_deadTimer, 0.0, 0.0, "%.2f");
+	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
-		for (auto& r : m_ragdolls)
-		{
-			r->m_isBreakable = DEBUG_breakable;
-		}
-	}
-	ImGui::PopStyleColor(1);
+	ImGui::InputFloat("Ragdoll Can Rest Timer", &DEBUG_ragdoll_canRestTimer, 0.0, 0.0, "%.2f");
+	ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
-	ImGui::SeparatorText("Ragdoll Dead Setting");
 	if (DEBUG_allRagdollLiveForever)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
@@ -1030,20 +1244,98 @@ void Game::IMGUI_UPDATE()
 	}
 	ImGui::PopStyleColor(1);
 
+	if (DEBUG_gameObjectCanRest)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+	}
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	}
+	ImGui::Button("All Game Object Can Rest", ImVec2(250, 30));
+	if (ImGui::IsItemClicked(0))
+	{
+		DEBUG_gameObjectCanRest = !DEBUG_gameObjectCanRest;
+	}
+	ImGui::PopStyleColor(1);
+
+	if (DEBUG_wakeWithEnergy)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+	}
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	}
+
+	ImGui::Button("Can Wake with Energy Threshold", ImVec2(250, 30));
+	if (ImGui::IsItemClicked(0))
+	{
+		DEBUG_wakeWithEnergy = !DEBUG_wakeWithEnergy;
+	}
+	ImGui::PopStyleColor(1);
+
+	if (DEBUG_solveConstraintWithFixedIteration)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+	}
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	}
+
+	ImGui::Button("Solve Constraints With Fixed Iteration", ImVec2(300, 30));
+	if (ImGui::IsItemClicked(0))
+	{
+		DEBUG_solveConstraintWithFixedIteration = !DEBUG_solveConstraintWithFixedIteration;
+
+		for (auto& ragdoll : m_ragdolls)
+		{
+			ragdoll->DEBUG_solveConstraintWithFixedIteration = DEBUG_solveConstraintWithFixedIteration;
+		}
+	}
+	ImGui::PopStyleColor(1);
+
+	if (DEBUG_breakable)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, activeColor);
+	}
+	else
+	{
+		ImGui::PushStyleColor(ImGuiCol_Button, inactiveColor);
+	}
+
+	ImGui::Button("Breakable Ragdoll (F3)", ImVec2(250, 30));
+	if (ImGui::IsItemClicked(0))
+	{
+		DEBUG_breakable = !DEBUG_breakable;
+
+		for (auto& r : m_ragdolls)
+		{
+			r->m_isBreakable = DEBUG_breakable;
+		}
+	}
+	ImGui::PopStyleColor(1);
+
 
 	ImGui::SeparatorText("Other Configurations");
 	if (m_currentState == GameState::FEATURE_MODE)
 	{
 		ImGui::InputDouble("Debug Move Speed", &DEBUG_NodeMoveSpeed, 0.0, 0.0, "%.2f");
-
-		if (!m_ragdolls.empty())
-		{
-			ImGui::InputDouble("Max Velocity Value XYZ", &m_ragdolls[0]->DEBUG_maxVelocity, 0.0, 0.0, "%.2f");
-			ImGui::InputDouble("Position Constraint Fix Rate", &m_ragdolls[0]->DEBUG_posFixRate, 0.0, 0.0, "%.2f");
-			ImGui::InputDouble("Angle Constraint Fix Rate", &m_ragdolls[0]->DEBUG_angleFixRate, 0.0, 0.0, "%.2f");
-		}
 	}
-
+	ImGui::InputFloat("Force Threshold Exit Resting", &DEBUG_forceThresholdExit, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Constraint Loop Num", &DEBUG_constraintNumLoop, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Velocity Threshold Exit Resting", &DEBUG_velocityThresholdExit, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Energy Threshold Exit Resting", &DEBUG_energyThresholdExit, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Max Velocity Value XYZ", &DEBUG_maxVelocity, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Position Constraint Fix Rate", &DEBUG_posFixRate, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Angle Constraint Fix Rate", &DEBUG_angleFixRate, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Coefficient of Restitution", &DEBUG_restitution, 0.0, 0.0, "%.2f");
+	DEBUG_restitution = Clamp(DEBUG_restitution, 0.f, 1.f);
+	ImGui::InputDouble("Max Friction", &DEBUG_maxFriction, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Collision Velocity Threshold", &DEBUG_contactCollisionThreshold, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Spring Stiffness", &DEBUG_springStiffness, 0.0, 0.0, "%.2f");
+	ImGui::InputDouble("Damping", &DEBUG_damping, 0.0, 0.0, "%.2f");
 	ImGui::Text("Current Time Step: %.3f", m_fixedTimeStep);
 	float newTimeStep = (float)TIME_STEP;
 	ImGui::InputFloat("New Fixed Time Step", &newTimeStep);
@@ -1062,6 +1354,24 @@ void Game::IMGUI_UPDATE()
 	if (m_currentState == GameState::FEATURE_MODE)
 	{
 		ImGui::SeparatorText("Data");
+		ImGui::Spacing();
+
+		if (ImGui::CollapsingHeader("Resting Data"))
+		{
+			for (auto& n : m_ragdolls[0]->GetNodeList())
+			{
+				bool rest = n->m_isResting;
+				if (rest)
+				{
+					ImGui::Text("Nodes [%s] is resting", n->m_name.c_str());
+				}
+				else
+				{
+					ImGui::Text("Nodes [%s] is NOT resting", n->m_name.c_str());
+				}
+
+			}
+		}
 		ImGui::Spacing();
 
 		if (ImGui::CollapsingHeader("Position Data"))
@@ -1088,7 +1398,7 @@ void Game::IMGUI_UPDATE()
 		{
 			for (auto& n : m_ragdolls[0]->GetNodeList())
 			{
-				Quaternion q = n->m_rotation;
+				Quaternion q = n->m_orientation;
 				ImGui::Text("Nodes [%s] Rotation: %.1f, %.1f, %.1f, %.1f", n->m_name.c_str(), q.w, q.i, q.j, q.k);
 			}
 		}
@@ -1216,6 +1526,14 @@ void Game::DrawGrid() const
 	g_theRenderer->DrawVertexArray((int)gridVertexes.size(), gridVertexes.data());
 }
 
+void Game::ToggleDebugDraw()
+{
+	DEBUG_DebugDraw = !DEBUG_DebugDraw;
+	DEBUG_DebugDrawOctree = DEBUG_DebugDraw;
+	DEBUG_DebugDrawBasis = DEBUG_DebugDraw;
+	DEBUG_DebugDrawVel = DEBUG_DebugDraw;
+}
+
 //----------------------------------------------------------------------------------------------------------------------------------------
 // GAME RESTART
 
@@ -1234,7 +1552,7 @@ void Game::FeatureModeRestart()
 		playerPosition = Vec3(25.f, 0.f, 20.f);
 	}
 
-	bool debug = DEBUG_drawDebug;
+	bool debug = DEBUG_DebugDraw;
 
 	if (m_player) delete m_player;
 	m_player = new Player(playerPosition, playerRotation);
@@ -1303,7 +1621,7 @@ void Game::FeatureModeRestart()
 	}
 
 	m_fixedTimeStep = timeStep;
-	DEBUG_drawDebug = debug;
+	DEBUG_DebugDraw = debug;
 }
 
 void Game::PachinkoModeRestart()
@@ -1341,40 +1659,40 @@ void Game::PachinkoModeRestart()
 		playerPosition = Vec3(75.f, 0.f, 75.f);
 	}
 
-	bool debug = DEBUG_drawDebug;
+	bool debug = DEBUG_DebugDraw;
 
 	if (m_player) delete m_player;
 	m_player = new Player(playerPosition, playerRotation);
 
 	Shutdown();
 
-	Object_AABB* wallBehind = new Object_AABB(this, DoubleAABB3(-25, -30, 0, -24, 30, 70));
+	Object_AABB* wallBehind = new Object_AABB(this, DoubleAABB3(-31, -30, 0, -30, 30, 70));
 	wallBehind->m_textureD = m_stoneTextureD;
 	wallBehind->m_textureN = m_stoneTextureN;
 	wallBehind->m_textureS = m_stoneTextureS;
 	m_fixedObjects.push_back(wallBehind);
 	m_allObjects.push_back(wallBehind);
 
-	Object_AABB* wallLeft = new Object_AABB(this, DoubleAABB3(-25, -30, 0, -5, -29, 70));
+	Object_AABB* wallLeft = new Object_AABB(this, DoubleAABB3(-30, -30, 0, -5, -29, 70));
 	wallLeft->m_textureD = m_stoneTextureD;
 	wallLeft->m_textureN = m_stoneTextureN;
 	wallLeft->m_textureS = m_stoneTextureS;
 	m_fixedObjects.push_back(wallLeft);
 	m_allObjects.push_back(wallLeft);
 
-	Object_AABB* wallRight = new Object_AABB(this, DoubleAABB3(-25, 30, 0, -5, 31, 70));
+	Object_AABB* wallRight = new Object_AABB(this, DoubleAABB3(-30, 30, 0, -5, 31, 70));
 	wallRight->m_textureD = m_stoneTextureD;
 	wallRight->m_textureN = m_stoneTextureN;
 	wallRight->m_textureS = m_stoneTextureS;
 	m_fixedObjects.push_back(wallRight);
 	m_allObjects.push_back(wallRight);
 
-	Object_AABB* wallFront = new Object_AABB(this, DoubleAABB3(-5, -30, 0, -4, 30, 70));
-	wallFront->m_textureD = m_transparentTexture;
-	wallFront->m_textureN = m_transparentTexture;
-	wallFront->m_textureS = m_transparentTexture;
-	m_fixedObjects.push_back(wallFront);
-	m_allObjects.push_back(wallFront);
+	//Object_AABB* wallFront = new Object_AABB(this, DoubleAABB3(-5, -30, 0, -4, 30, 70));
+	//wallFront->m_textureD = m_transparentTexture;
+	//wallFront->m_textureN = m_transparentTexture;
+	//wallFront->m_textureS = m_transparentTexture;
+	//m_fixedObjects.push_back(wallFront);
+	//m_allObjects.push_back(wallFront);
 
 	for (int i = 0; i < 5; i++)
 	{
@@ -1382,7 +1700,7 @@ void Game::PachinkoModeRestart()
 		DoubleVec3 halfD = DoubleVec3(g_theRNG->RollRandomFloatInRange(2, 5), g_theRNG->RollRandomFloatInRange(2, 5), g_theRNG->RollRandomFloatInRange(2, 5));
 
 		Object_AABB* aabb = new Object_AABB(this, DoubleAABB3(center, halfD.z, halfD.x, halfD.y));
-		aabb->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		aabb->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(aabb);
 		m_allObjects.push_back(aabb);
 	}
@@ -1397,7 +1715,7 @@ void Game::PachinkoModeRestart()
 		DoubleVec3 obb_halfD = DoubleVec3(g_theRNG->RollRandomFloatInRange(2, 5), g_theRNG->RollRandomFloatInRange(2, 5), g_theRNG->RollRandomFloatInRange(2, 5));
 
 		Object_OBB* obb = new Object_OBB(this, DoubleOBB3(obb_mat.GetTranslation3D(), obb_mat.GetIBasis3D(), obb_mat.GetJBasis3D(), obb_halfD));
-		obb->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		obb->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(obb);
 		m_allObjects.push_back(obb);
 	}
@@ -1407,7 +1725,7 @@ void Game::PachinkoModeRestart()
 		Object_Sphere* sphere = new Object_Sphere(this,
 			DoubleVec3(g_theRNG->RollRandomFloatInRange(-20, -10), g_theRNG->RollRandomFloatInRange(-25, 25), g_theRNG->RollRandomFloatInRange(5, 60)),
 			g_theRNG->RollRandomFloatInRange(2, 5));
-		sphere->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		sphere->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(sphere);
 		m_allObjects.push_back(sphere);
 	}
@@ -1422,14 +1740,14 @@ void Game::PachinkoModeRestart()
 		DoubleVec3 capsuleEnd = capsuleStart + capsule_mat.GetIBasis3D() * g_theRNG->RollRandomFloatInRange(2, 5);
 
 		Object_Capsule* capsule = new Object_Capsule(this, DoubleCapsule3(capsuleStart, capsuleEnd, g_theRNG->RollRandomFloatInRange(2, 5)));
-		capsule->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		capsule->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(capsule);
 		m_allObjects.push_back(capsule);
 	}
 
 	Init_Octree();
 
-	DEBUG_drawDebug = debug;
+	DEBUG_DebugDraw = debug;
 }
 
 void Game::CannonModeRestart()
@@ -1449,7 +1767,7 @@ void Game::CannonModeRestart()
 		playerPosition = Vec3(75.f, 0.f, 10.f);
 	}
 
-	bool debug = DEBUG_drawDebug;
+	bool debug = DEBUG_DebugDraw;
 
 	if (m_player) delete m_player;
 	m_player = new Player(playerPosition, playerRotation);
@@ -1466,7 +1784,7 @@ void Game::CannonModeRestart()
 		DoubleVec3 halfD = DoubleVec3(g_theRNG->RollRandomFloatInRange(5, 20), g_theRNG->RollRandomFloatInRange(5, 20), g_theRNG->RollRandomFloatInRange(5, 20));
 
 		Object_AABB* aabb = new Object_AABB(this, DoubleAABB3(center, halfD.z, halfD.x, halfD.y));
-		aabb->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		aabb->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(aabb);
 		m_allObjects.push_back(aabb);
 	}
@@ -1483,7 +1801,7 @@ void Game::CannonModeRestart()
 		DoubleVec3 obb_halfD = DoubleVec3(g_theRNG->RollRandomFloatInRange(5, 20), g_theRNG->RollRandomFloatInRange(5, 20), g_theRNG->RollRandomFloatInRange(5, 20));
 
 		Object_OBB* obb = new Object_OBB(this, DoubleOBB3(obb_mat.GetTranslation3D(), obb_mat.GetIBasis3D(), obb_mat.GetJBasis3D(), obb_halfD));
-		obb->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		obb->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(obb);
 		m_allObjects.push_back(obb);
 	}
@@ -1494,7 +1812,7 @@ void Game::CannonModeRestart()
 		float y = g_theRNG->RollRandomFloatInRange(g_theRNG->RollRandomFloatInRange(-spawnlimit, playerPosition.y - deadZone), g_theRNG->RollRandomFloatInRange(playerPosition.y + deadZone, spawnlimit));
 		DoubleVec3 center = DoubleVec3(x, y, g_theRNG->RollRandomFloatInRange(5, 60));
 		Object_Sphere* sphere = new Object_Sphere(this, center, g_theRNG->RollRandomFloatInRange(5, 20));
-		sphere->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		sphere->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(sphere);
 		m_allObjects.push_back(sphere);
 	}
@@ -1512,7 +1830,7 @@ void Game::CannonModeRestart()
 		DoubleVec3 capsuleEnd = capsuleStart + capsule_mat.GetIBasis3D() * g_theRNG->RollRandomFloatInRange(10, 25);
 
 		Object_Capsule* capsule = new Object_Capsule(this, DoubleCapsule3(capsuleStart, capsuleEnd, g_theRNG->RollRandomFloatInRange(5, 20)));
-		capsule->m_color = Rgba8::GetRandomColor(false, g_theRNG->RollRandomUnsignedIntInRange(i, INT_MAX));
+		capsule->m_color = Rgba8::GetRandomColor(false);
 		m_fixedObjects.push_back(capsule);
 		m_allObjects.push_back(capsule);
 	}
@@ -1520,22 +1838,22 @@ void Game::CannonModeRestart()
 
 	Init_Octree();
 
-	DEBUG_drawDebug = debug;
+	DEBUG_DebugDraw = debug;
 }
 
-void Game::SpawnRagdoll(Mat44 transform, Rgba8 color, float deadTimer, bool breakable, Vec3 initialVelocity, bool active)
+void Game::SpawnRagdoll(Mat44 transform, Rgba8 color, Vec3 initialVelocity)
 {
 	VerletConfig config;
 
 	Ragdoll* newR = new Ragdoll(this, transform, DEBUG_ragdoll_deadTimer, config, m_ragdollDebugType, color, Rgba8::GetDarkerColor(color, 0.3f));
-	newR->m_deadTimer = deadTimer;
-	newR->m_isBreakable = breakable;
-	newR->m_isActive = active;
+	newR->m_deadTimer = DEBUG_ragdoll_deadTimer;
+	newR->m_isBreakable = DEBUG_breakable;
+	newR->DEBUG_solveConstraintWithFixedIteration = DEBUG_solveConstraintWithFixedIteration;
 
-	if (active)
-	{
-		newR->ApplyGlobalImpulseOnRoot(initialVelocity);
-	}
+	newR->ApplyGlobalImpulseOnRoot(initialVelocity);
+	newR->DEBUG_maxVelocity = DEBUG_maxVelocity;
+	newR->DEBUG_posFixRate = DEBUG_posFixRate;
+	newR->DEBUG_angleFixRate = DEBUG_angleFixRate;
 
 	m_ragdolls.push_back(newR);
 
@@ -1579,39 +1897,69 @@ void Game::Menu_Init()
 	m_menuCanvas = new Canvas(g_UI, m_screenCamera);
 
 	IntVec2 screenSize = Window::GetMainWindowInstance()->GetClientDimensions();
-	float aspectTextWidth = screenSize.x / 1920.f;
+	float aspect = Window::GetMainWindowInstance()->GetAspect();
 
-	TextSetting titleTextSetting1 = TextSetting("Ragdoll Physics Artifact");
+	TextSetting titleTextSetting1 = TextSetting("Ragdoll Physics\nArtifact");
 	titleTextSetting1.m_color = Rgba8::COLOR_WHITE;
-	titleTextSetting1.m_height = 80.f * aspectTextWidth;
-	Vec2 titlePos = Vec2(screenSize.x * 0.18f, screenSize.y * 0.65f);
+	titleTextSetting1.m_height = 80.f * aspect;
+	Vec2 titlePos = Vec2(screenSize.x * 0.5f, screenSize.y * 0.85f);
 	m_title1 = new Text(m_menuCanvas, titlePos, titleTextSetting1, nullptr);
 
 	TextSetting titleTextSetting2 = TextSetting("by Son Nguyen");
 	titleTextSetting2.m_color = Rgba8::COLOR_GREEN;
-	titleTextSetting2.m_height = 64.f * aspectTextWidth;
-	m_title2 = new Text(m_menuCanvas, titlePos + Vec2(256 * aspectTextWidth, -64), titleTextSetting2, nullptr);
+	titleTextSetting2.m_height = 30.f * aspect;
+	m_title2 = new Text(m_menuCanvas, titlePos + Vec2(0.f, -250.f), titleTextSetting2, nullptr);
 
 	TextSetting featureTS = TextSetting("Feature Mode");
 	featureTS.m_color = Rgba8::COLOR_WHITE;
-	featureTS.m_height = 32.f * aspectTextWidth;
-	m_featureMode = new Button(m_menuCanvas, AABB2(150, 300, 550, 390), featureTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
+	featureTS.m_height = 22.f * aspect;
+	m_featureMode = new Button(m_menuCanvas, AABB2(screenSize.x * 0.5f - 200, 300, screenSize.x * 0.5f + 200, 390), featureTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
 	m_featureMode->m_textColorHover = Rgba8::COLOR_WHITE;
 	m_featureMode->OnClickEvent([this]() {SwitchState(GameState::FEATURE_MODE); });
 
 	TextSetting pachinkoTS = TextSetting("Pachinko Mode");
 	pachinkoTS.m_color = Rgba8::COLOR_WHITE;
-	pachinkoTS.m_height = 32.f * aspectTextWidth;
-	m_featureMode = new Button(m_menuCanvas, AABB2(150, 200, 550, 290), pachinkoTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
+	pachinkoTS.m_height = 22.f * aspect;
+	m_featureMode = new Button(m_menuCanvas, AABB2(screenSize.x * 0.5f - 200, 200, screenSize.x * 0.5f + 200, 290), pachinkoTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
 	m_featureMode->m_textColorHover = Rgba8::COLOR_WHITE;
 	m_featureMode->OnClickEvent([this]() {SwitchState(GameState::PACHINKO_MODE); });
 
 	TextSetting gameTS = TextSetting("Cannon Game Mode");
 	gameTS.m_color = Rgba8::COLOR_WHITE;
-	gameTS.m_height = 32.f * aspectTextWidth;
-	m_featureMode = new Button(m_menuCanvas, AABB2(150, 100, 550, 190), gameTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
+	gameTS.m_height = 22.f * aspect;
+	m_featureMode = new Button(m_menuCanvas, AABB2(screenSize.x * 0.5f - 200, 100, screenSize.x * 0.5f + 200, 190), gameTS, Rgba8::COLOR_DARK_GRAY, Rgba8::COLOR_DARK_GREEN, Rgba8::COLOR_WHITE, true, Rgba8::COLOR_BLACK, nullptr);
 	m_featureMode->m_textColorHover = Rgba8::COLOR_WHITE;
 	m_featureMode->OnClickEvent([this]() {SwitchState(GameState::CANNON_MODE); });
+}
+
+void Game::RaycastVsRagdolls()
+{
+	if (m_ragdolls.empty()) return;
+	IntVec2 clientDim = Window::GetMainWindowInstance()->GetClientDimensions();
+	Vec2 mousePos = g_theInput->GetCursorNormalizedPosition() * Vec2((float)clientDim.x, (float)clientDim.y);
+	RaycastRagdollResult3D closestRagdollNodeHit;
+
+	for (auto& ragdoll : m_ragdolls)
+	{
+		RaycastRagdollResult3D result = MouseRaycastVsRagdollNode(m_player->GetCamera(), mousePos, ragdoll);
+		if (result.m_didImpact)
+		{
+			if (!closestRagdollNodeHit.m_didImpact)
+			{
+				closestRagdollNodeHit = result;
+			}
+			else
+			{
+				if (result.m_impactDist < closestRagdollNodeHit.m_impactDist)
+				{
+					closestRagdollNodeHit = result;
+				}
+			}
+		}
+
+	}
+
+	m_ragdollRaycastResult = closestRagdollNodeHit;
 }
 
 //----------------------------------------------------------------------------------------------------------------------------------------
@@ -1634,11 +1982,15 @@ void Game::HandleInput()
 	}
 	if (g_theInput->WasKeyJustPressed(KEYCODE_F2))
 	{
-		DEBUG_drawDebug = !DEBUG_drawDebug;
+		ToggleDebugDraw();
 	}
 	if (g_theInput->WasKeyJustPressed(KEYCODE_F3))
 	{
 		DEBUG_breakable = !DEBUG_breakable;
+	}
+	if (g_theInput->WasKeyJustPressed(KEYCODE_F4))
+	{
+		DEBUG_raycast = !DEBUG_raycast;
 	}
 	if (g_theInput->WasKeyJustPressed(KEYCODE_F9))
 	{
@@ -1647,6 +1999,24 @@ void Game::HandleInput()
 	if (g_theInput->WasKeyJustPressed('R'))
 	{
 		SwitchState(m_currentState);
+	}
+}
+
+void Game::UpdateAllCurrentRagdolls()
+{
+	if (m_ragdolls.empty()) return;
+
+	for (auto& r : m_ragdolls)
+	{
+		r->DEBUG_angleFixRate = DEBUG_angleFixRate;
+		r->DEBUG_posFixRate = DEBUG_posFixRate;
+		r->DEBUG_maxVelocity = DEBUG_maxVelocity;
+		r->m_isBreakable = DEBUG_breakable;
+		r->m_deadTimer = DEBUG_ragdoll_deadTimer;
+		if (DEBUG_allRagdollLiveForever)
+		{
+			r->m_isDead = false;
+		}
 	}
 }
 
@@ -1685,7 +2055,7 @@ void Object_AABB::Render() const
 	g_theRenderer->SetModelConstants(Mat44(), m_color);
 	g_theRenderer->DrawIndexedBuffer(m_vbuffer, m_ibuffer, m_indexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (m_game->DEBUG_drawDebug)
+	if (m_game->DEBUG_DebugDraw && m_game->DEBUG_DebugDrawOctree)
 	{
 		g_theRenderer->BindShader(nullptr);
 		g_theRenderer->BindTexture(nullptr, 0);
@@ -1736,7 +2106,7 @@ void Object_OBB::Render() const
 	g_theRenderer->SetModelConstants(Mat44(), m_color);
 	g_theRenderer->DrawIndexedBuffer(m_vbuffer, m_ibuffer, m_indexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (m_game->DEBUG_drawDebug)
+	if (m_game->DEBUG_DebugDraw && m_game->DEBUG_DebugDrawOctree)
 	{
 		g_theRenderer->BindShader(nullptr);
 		g_theRenderer->BindTexture(nullptr, 0);
@@ -1786,7 +2156,7 @@ void Object_Sphere::Render() const
 	g_theRenderer->SetModelConstants(Mat44(), m_color);
 	g_theRenderer->DrawIndexedBuffer(m_vbuffer, m_ibuffer, m_indexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (m_game->DEBUG_drawDebug)
+	if (m_game->DEBUG_DebugDraw && m_game->DEBUG_DebugDrawOctree)
 	{
 		g_theRenderer->BindShader(nullptr);
 		g_theRenderer->BindTexture(nullptr, 0);
@@ -1838,7 +2208,7 @@ void Object_Capsule::Render() const
 	g_theRenderer->SetModelConstants(Mat44(), m_color);
 	g_theRenderer->DrawIndexedBuffer(m_vbuffer, m_ibuffer, m_indexes.size(), 0, VertexType::Vertex_PCUTBN);
 
-	if (m_game->DEBUG_drawDebug)
+	if (m_game->DEBUG_DebugDraw && m_game->DEBUG_DebugDrawOctree)
 	{
 		g_theRenderer->BindShader(nullptr);
 		g_theRenderer->BindTexture(nullptr, 0);
@@ -1861,3 +2231,4 @@ bool Object_Capsule::CollisionResolveVsRagdollNode(Node* node)
 	if (result)node->m_ragdoll->BreakNodeFromRagdoll(node);
 	return result;
 }
+

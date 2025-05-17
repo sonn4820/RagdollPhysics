@@ -37,7 +37,7 @@ Octree::~Octree()
 	}
 }
 
-void Octree::Update(float deltaSeconds)
+void Octree::Update()
 {
 	if (!bm_built || !bm_ready)
 	{
@@ -45,7 +45,7 @@ void Octree::Update(float deltaSeconds)
 		return;
 	}
 
-	UpdateTreeObjects(this, deltaSeconds);
+	UpdateTreeObjects(this);
 
 	if (m_isRoot)
 	{
@@ -71,10 +71,10 @@ void Octree::Update(float deltaSeconds)
 
 void Octree::Render() const
 {
-	if (!m_debugDraw) return;
-
-	g_theRenderer->BindTexture(nullptr);
 	g_theRenderer->BindShader(nullptr);
+	g_theRenderer->BindTexture(nullptr, 0);
+	g_theRenderer->BindTexture(nullptr, 1);
+	g_theRenderer->BindTexture(nullptr, 2);
 	g_theRenderer->SetDepthStencilMode(DepthMode::ENABLED);
 
 	Rgba8 color = Rgba8::COLOR_PINK;
@@ -297,7 +297,7 @@ Octree* Octree::CreateNode(DoubleAABB3 region, GameObject* object)
 	return tree;
 }
 
-void Octree::UpdateTreeObjects(Octree* tree, float deltaSeconds)
+void Octree::UpdateTreeObjects(Octree* tree)
 {
 	std::vector<GameObject*> movedObjects;
 
@@ -319,7 +319,7 @@ void Octree::UpdateTreeObjects(Octree* tree, float deltaSeconds)
 		{
 			if ((flags & 1) == 1)
 			{
-				UpdateTreeObjects(tree->m_childNode[index], deltaSeconds);
+				UpdateTreeObjects(tree->m_childNode[index]);
 			}
 		}
 	}

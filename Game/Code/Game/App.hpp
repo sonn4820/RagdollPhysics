@@ -16,6 +16,13 @@
 #include "ThirdParty/imgui/imgui.h"
 #include "ThirdParty/imgui/backends/imgui_impl_win32.h"
 #include "ThirdParty/imgui/backends/imgui_impl_dx11.h"
+
+//
+//___________________________________________________________
+// Author: Guildhall C33 - Son Nguyen
+// Title: Ragdoll Physics
+//___________________________________________________________
+//
 class Game;
 
 class App {
@@ -40,8 +47,12 @@ public:
 	static bool Event_Quit(EventArgs& args);
 
 	bool m_isQuitting = false;
+
+	void ShowFPSGraph();
 	
 private:
 	void ConsoleTutorial();
 	void InitializeGameConfig(const char* filePath);
+	std::vector<float> m_fpsHistory;
+	unsigned int m_fpsIndex = 0;
 };

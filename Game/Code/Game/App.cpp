@@ -10,6 +10,7 @@ Renderer* g_theRenderer = nullptr;
 AudioSystem* g_theAudio = nullptr;
 Window* g_theWindow = nullptr;
 BitmapFont* g_theFont = nullptr;
+JobSystem* g_theJobSystem = nullptr;
 UISystem* g_UI = nullptr;
 Game* g_theGame = nullptr;
 
@@ -60,6 +61,9 @@ void App::Startup()
 	DebugRenderConfig debugrenderConfig;
 	debugrenderConfig.m_renderer = g_theRenderer;
 
+	JobSystemConfig jobSysConfig;
+	g_theJobSystem = new JobSystem(jobSysConfig);
+
 	Clock::s_theSystemClock->TickSystemClock();
 	g_theEventSystem->Startup();
 	g_theInput->Startup();
@@ -68,6 +72,7 @@ void App::Startup()
 	DebugRenderSystemStartUp(debugrenderConfig);
 	g_theAudio->Startup();
 	g_theDevConsole->Startup();
+	g_theJobSystem->Startup();
 
 	g_theFont = g_theRenderer->CreateOrGetBitmapFont("Data/Fonts/RobotoMonoSemiBold128");
 
@@ -119,6 +124,7 @@ void App::Shutdown()
 	g_theWindow->Startup();
 	g_theInput->Shutdown();
 	g_theEventSystem->Shutdown();
+	g_theJobSystem->Shutdown();
 
 	delete g_theRNG;
 	delete g_theGame;
@@ -135,6 +141,8 @@ void App::Shutdown()
 	g_theInput = nullptr;
 	delete g_theEventSystem;
 	g_theEventSystem = nullptr;
+	delete g_theJobSystem;
+	g_theJobSystem = nullptr;
 
 }
 
@@ -176,6 +184,7 @@ void App::BeginFrame()
 	DebugRenderBeginFrame();
 	g_theAudio->BeginFrame();
 	g_theDevConsole->BeginFrame();
+	g_theJobSystem->BeginFrame();
 }
 
 void App::Update(float deltaSeconds)
@@ -228,6 +237,7 @@ void App::EndFrame()
 	DebugRenderEndFrame();
 	g_theAudio->EndFrame();
 	g_theDevConsole->EndFrame();
+	g_theJobSystem->EndFrame();
 }
 
 void App::ConsoleTutorial()
@@ -271,4 +281,36 @@ void App::InitializeGameConfig(const char* filePath)
 	XmlElement* element = file.FirstChildElement();
 
 	g_gameConfigBlackboard.PopulateFromXmlElementAttributes(*element);
+}
+
+void App::ShowFPSGraph()
+{
+	float currentFPS = ImGui::GetIO().Framerate;
+	m_fpsHistory.push_back(currentFPS);
+	m_fpsIndex = (m_fpsIndex + 1) % m_fpsHistory.size();
+	ImGui::Text("FPS: %.1f", currentFPS);
+	float graphPaddingLeft = 20.0f;
+	float graphPaddingRight = 20.0f;
+	ImVec2 graphSize = ImVec2(ImGui::GetContentRegionAvail().x - graphPaddingLeft - graphPaddingRight, 80.0f);
+	ImGui::Dummy(ImVec2(graphPaddingLeft, 0.0f));
+	ImGui::SameLine();
+	ImVec2 graphMin = ImGui::GetCursorScreenPos();
+	ImVec2 graphMax = ImVec2(graphMin.x + graphSize.x, graphMin.y + graphSize.y);
+	ImGui::PlotLines("##FPSGraph", m_fpsHistory.data(), static_cast<int>(m_fpsHistory.size()),
+		m_fpsIndex, nullptr, 0.0f, 80.0f, graphSize);
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	ImU32 greenLineColor = IM_COL32(100, 255, 100, 100);
+	ImU32 yellowLineColor = IM_COL32(255, 255, 100, 100);
+	ImU32 redLineColor = IM_COL32(255, 100, 100, 100);
+	float fontSize = ImGui::GetFontSize();
+	float y0 = graphMax.y; // 0 FPS
+	float y30 = graphMax.y - graphSize.y * (30.0f / 80.0f); // 30 FPS
+	float y60 = graphMax.y - graphSize.y * (60.0f / 80.0f); // 60 FPS
+	float textOffsetX = graphMin.x - 22.0f;
+	drawList->AddLine(ImVec2(graphMin.x, y0), ImVec2(graphMax.x, y0), redLineColor); // 0 FPS
+	drawList->AddLine(ImVec2(graphMin.x, y30), ImVec2(graphMax.x, y30), yellowLineColor); // 30 FPS
+	drawList->AddLine(ImVec2(graphMin.x, y60), ImVec2(graphMax.x, y60), greenLineColor); // 60 FPS
+	drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textOffsetX, y0 - fontSize * 0.5f), redLineColor, "0");
+	drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textOffsetX, y30 - fontSize * 0.5f), yellowLineColor, "30");
+	drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textOffsetX, y60 - fontSize * 0.5f), greenLineColor, "60");
 }

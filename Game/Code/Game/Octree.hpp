@@ -51,7 +51,7 @@ struct Octree
 	VertexBuffer* m_debugbuffer = nullptr;
 
 	void Init();
-	void Update(float deltaSeconds);
+	void Update();
 	void Render() const;
 	bool Insert(GameObject* object);
 	void BuildTree();
@@ -61,11 +61,8 @@ struct Octree
 	Octree* CreateNode(DoubleAABB3 region, std::vector<GameObject*> objects);
 	Octree* CreateNode(DoubleAABB3 region, GameObject* object);
 
-	void UpdateTreeObjects(Octree* tree, float deltaSeconds);
+	void UpdateTreeObjects(Octree* tree);
 	void PruneDeadBranches(Octree* tree);
-
-	bool m_debugDraw = true;
-
 private:
 
 	std::vector<CollisionRecord*> GetIntersection(std::vector<GameObject*> parentObj);

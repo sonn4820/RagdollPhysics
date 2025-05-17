@@ -21,6 +21,7 @@
 #include "Engine/UI/Canvas.hpp"
 #include "Engine/UI/Button.hpp"
 #include "Engine/UI/Text.hpp"
+#include "Engine/Core/JobSystem.hpp"
 
 
 #include "Game/App.hpp"
@@ -34,6 +35,7 @@ extern RandomNumberGenerator* g_theRNG;
 extern BitmapFont* g_theFont;
 extern UISystem* g_UI;
 extern Game* g_theGame;
+extern JobSystem* g_theJobSystem;
 
 constexpr double TIME_STEP = 0.005;
 constexpr float WORLD_SIZE_X = 200.f;

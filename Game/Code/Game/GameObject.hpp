@@ -14,6 +14,7 @@ class GameObject
 {
 public:
 	GameObject(Game* game);
+	GameObject(Game* game, DoubleMat44 transform);
 	virtual ~GameObject();
 
 	virtual void Render() const = 0;
@@ -37,11 +38,13 @@ public:
 public:
 	Game* m_game = nullptr;
 
+	bool m_isResting = false;
 	DoubleVec3 m_position = DoubleVec3::ZERO;
 	DoubleVec3 m_velocity = DoubleVec3::ZERO; 
 	DoubleVec3 m_acceleration = DoubleVec3::ZERO;
-	DoubleQuaternion m_rotation = DoubleQuaternion(0, 0, 1, 0);
+	DoubleQuaternion m_orientation = DoubleQuaternion(0, 0, 1, 0);
 	DoubleVec3 m_angularVelocity = DoubleVec3::ZERO;
+	DoubleVec3 m_lastFrameTorque = DoubleVec3::ZERO;
 	DoubleVec3 m_torque = DoubleVec3::ZERO;
 	DoubleVec3 m_netForce = DoubleVec3::ZERO;
 

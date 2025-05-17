@@ -8,6 +8,12 @@ GameObject::GameObject(Game* game)
 
 }
 
+GameObject::GameObject(Game* game, DoubleMat44 transform)
+	:m_game(game), m_position(transform.GetTranslation3D()), m_orientation(transform.GetDoubleQuaternion())
+{
+
+}
+
 GameObject::~GameObject()
 {
 	delete m_vbuffer;
@@ -43,7 +49,7 @@ void GameObject::CreateBuffer(Renderer* renderer)
 
 DoubleMat44 GameObject::GetModelMatrix() const
 {
-	return m_rotation.GetConjugated().GetMatrix(m_position);
+	return m_orientation.GetConjugated().GetMatrix(m_position);
 }
 
 DoubleVec3 GameObject::GetAcceleration() const
@@ -58,11 +64,19 @@ DoubleVec3 GameObject::GetInverseInertiaTensor() const
 
 void GameObject::AccumulateForce(DoubleVec3 force)
 {
+	if (m_isResting && force.GetLength() > m_game->DEBUG_forceThresholdExit)
+	{
+		m_isResting = false;
+	}
 	m_netForce += force;
 }
 
 void GameObject::AccumulateAngularForce(DoubleVec3 torque)
 {
+	if (m_isResting && torque.GetLength() > m_game->DEBUG_forceThresholdExit)
+	{
+		m_isResting = false;
+	}
 	m_torque += torque;
 }
 
@@ -75,11 +89,27 @@ void GameObject::ApplyForceAtPoint(DoubleVec3 force, DoubleVec3 point)
 
 void GameObject::AccumulateImpulse(DoubleVec3 impulse)
 {
+	//if (impulse.GetLength() > restingSpeed)
+	//{
+	//	m_isResting = false;
+	//}
+	//else
+	//{
+	//	return;
+	//}
 	m_velocity += impulse;
 }
 
 void GameObject::AccumulateAngularImpulse(DoubleVec3 impulse, DoubleVec3 r)
 {
+	//if (impulse.GetLength() > restingSpeed)
+	//{
+	//	m_isResting = false;
+	//}
+	//else
+	//{
+	//	return;
+	//}
 	m_angularVelocity += GetInverseInertiaTensor() * r.Cross(impulse);
 }
 
